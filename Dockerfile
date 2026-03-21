@@ -1,5 +1,5 @@
 # Build stage
-ARG GO_VERSION
+ARG GO_VERSION=1.26.1
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS builder
 
 ARG TARGETOS
