@@ -1,7 +1,7 @@
 # Build stage
+ARG GO_VERSION
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS builder
 
-ARG GO_VERSION
 ARG TARGETOS
 ARG TARGETARCH
 
