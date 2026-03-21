@@ -1,64 +1,105 @@
-We will build a Go service for Kubernetes that listens to events for Spark driver pods.
+# k8s-spark-ui-assist
 
-We will make a lightweight service that requires the minimum possible memory. We will
-ensure that all source format is consistent, enforcing code formatting tools at build time.
-We will also include unit tests to ensure that business logic is solid.
+A lightweight Kubernetes service that discovers running Apache Spark jobs in its namespace
+and serves a web page with links to each job's Spark UI.
 
-It will keep a list of all running Spark drivers in the same namespace that this service.
-A pod is considered to be a Spark driver if it has these two labels (both):
- - app.kubernetes.io/instance: spark-job
- - spark-role: driver
+## What it does
 
-We will keep in that list following tag fields about the Spark job:
- - Creation timestamp
- - spark-app-selector tag
- - spark-app-name tag
+When Spark submits a job on Kubernetes it creates a *driver pod* that hosts the Spark UI
+on port 4040. Those pods are short-lived and their addresses change between runs, making
+them hard to bookmark or share.
 
-To keep the list of Spark drivers updated, it will:
-* List all pods matching those labels at start up
-* Listen to start and stop Kubernetes events, to add or remove pods from the list
+`k8s-spark-ui-assist` solves this by:
 
-Finally, it will expose a web service with a single endpoint at '/' that list all Spark jobs:
- - <a href="/live/{{spark-app-selector}}/">{{spark-app-name}}</a> (running for [N days and ]HH:MM:SS)
+1. Watching the namespace for Spark driver pods (identified by their labels).
+2. Maintaining a live list of running jobs.
+3. Serving a single web page at `/` that links to every active Spark UI, showing how long
+   each job has been running.
+4. Optionally creating a [Gateway API](https://gateway-api.sigs.k8s.io/) `HTTPRoute` for
+   each driver as it starts, and deleting it when the job finishes, so the UIs are
+   reachable through a shared gateway hostname without extra manual steps.
 
-Durations will not include 0 days component. For example: (running for 23:59:59) -> (running for 1 day 00:00:00)
+## Requirements
 
-As an optional feature, it can create HttpRoutes for Spark Drivers. Configuration:
- - http-route.enabled: true
- - http-route.hostname (str) hostname to include in the HTTPRoute at spec.hostnames[0]
- - http-route.gateway-name (str) name to put in spec.parentRefs[0].name
- - http-route.gateway-namespace (str) namespace to put in spec.parentRefs[0].namespace
+- Kubernetes cluster with RBAC permissions to `list` and `watch` pods in the service namespace.
+- (Optional) [Gateway API](https://gateway-api.sigs.k8s.io/) CRDs installed and a running
+  gateway, if HTTPRoute management is enabled.
 
-When starting, it will create HTTPRoutes for those Spark Drivers that does not have one. When
-receiving the event that a Spark driver has been created, it also creates a route. And it
-deletes the routes when it detects that a Spark driver has terminated.
+Spark driver pods must carry these two labels for the service to recognise them:
 
-It will generate an HTTP routes in current namespace like this:
-```yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: "{{ spark-app-selector }}-ui-route"
-spec:
-  parentRefs:
-    - name: "{{ gateway-name }}" 
-      namespace: {{ gateway-namespace }}
-      port: 443
-  hostnames:
-    - "{{ hostname }}"
-  rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /live/{{ spark-app-selector }}
-      filters:
-        - type: URLRewrite
-          urlRewrite:
-            path:
-              type: ReplacePrefixMatch
-              replacePrefixMatch: /
-      backendRefs:
-        - name: {{ spark-app-name }}-ui-svc
-          port: 4040
-          kind: Service
+| Label | Value |
+|---|---|
+| `app.kubernetes.io/instance` | `spark-job` |
+| `spark-role` | `driver` |
+
+The following labels are read for display purposes:
+
+| Label | Used for |
+|---|---|
+| `spark-app-name` | Human-readable job name shown on the page |
+| `spark-app-selector` | URL path segment and HTTPRoute name |
+
+## Running
+
+### In-cluster (recommended)
+
+Deploy the service in the same namespace as your Spark jobs. It auto-detects the namespace
+from the service account token.
+
+```sh
+docker build -t k8s-spark-ui-assist:latest .
+# push to your registry, then deploy via your preferred method (Deployment, Helm, etc.)
 ```
+
+The HTTP server listens on **port 8080**.
+
+### Locally against a cluster
+
+```sh
+go run ./cmd/spark-ui-assist -namespace my-spark-namespace
+```
+
+The service falls back to your local `~/.kube/config` when it is not running inside a cluster.
+
+## Configuration flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `-namespace` | auto-detected from service account | Kubernetes namespace to watch |
+| `-http-route.enabled` | `false` | Enable automatic HTTPRoute management |
+| `-http-route.hostname` | _(required when enabled)_ | Hostname placed in `spec.hostnames[0]` |
+| `-http-route.gateway-name` | _(required when enabled)_ | Gateway name for `spec.parentRefs[0].name` |
+| `-http-route.gateway-namespace` | _(required when enabled)_ | Gateway namespace for `spec.parentRefs[0].namespace` |
+
+When `-http-route.enabled=true`, all three `-http-route.*` flags are required; the service
+exits immediately with an error listing the missing flags if any are omitted.
+
+## Web UI
+
+Visiting `http://<service>:8080/` returns an HTML page like:
+
+```
+Running Spark Jobs
+
+• my-etl-job   (running for 01:23:45)
+• nightly-ml   (running for 2 days 08:00:00)
+```
+
+Each entry is a link to `/live/<spark-app-selector>/`, which your gateway or ingress should
+proxy to the driver pod's port 4040.
+
+Durations omit the days component when less than 24 hours have elapsed
+(`23:59:59` → `1 day 00:00:00`).
+
+## Development
+
+```sh
+make test    # fmt check + vet + unit tests (race detector on)
+make build   # produces ./spark-ui-assist binary
+```
+
+The build enforces `gofmt` formatting — unformatted files cause `make build` to fail.
+
+## License
+
+GNU General Public License v3.0 — see [LICENSE](LICENSE).
