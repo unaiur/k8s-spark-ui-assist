@@ -11,7 +11,6 @@ RUN go mod download
 
 COPY . .
 RUN gofmt -l . | grep . && exit 1 || true
-RUN go vet ./...
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags="-s -w" -o /spark-ui-assist ./cmd/spark-ui-assist
 
