@@ -29,11 +29,8 @@ jobs:
             exit 1
           fi
 
-      - name: Vet
-        run: go vet ./...
-
       - name: Test
-        run: go test -race ./...
+        run: go test -race -vet=all ./...
 
       - name: Build
         run: go build -trimpath -ldflags="-s -w" -o spark-ui-assist ./cmd/spark-ui-assist
