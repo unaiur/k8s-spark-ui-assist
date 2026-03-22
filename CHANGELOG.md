@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.4](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.1.3...v1.1.4) (2026-03-22)
+
+
+### Bug Fixes
+
+* add extraVolumes and extraVolumeMounts support to helm chart ([ab2f294](https://github.com/unaiur/k8s-spark-ui-assist/commit/ab2f29457e9a1fbb36d7bcdae21dc2c9ca81da84))
+
 ## [1.1.3](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.1.2...v1.1.3) (2026-03-22)
 
 
