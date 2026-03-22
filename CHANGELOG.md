@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.5](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.1.4...v1.1.5) (2026-03-22)
+
+
+### Bug Fixes
+
+* remove irrelevant volume configuration ([e704ef6](https://github.com/unaiur/k8s-spark-ui-assist/commit/e704ef62898f202cdd07059aae2784fdcc4c0169))
+
 ## [1.1.4](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.1.3...v1.1.4) (2026-03-22)
 
 
