@@ -54,6 +54,10 @@ spec:
               port: http
             initialDelaySeconds: 10
             periodSeconds: 30
+          {{- with .Values.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
