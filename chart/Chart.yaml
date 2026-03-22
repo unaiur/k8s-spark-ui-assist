@@ -5,8 +5,8 @@ description: >
   linking to each job's Spark UI. Optionally manages Gateway API HTTPRoutes for
   each driver pod automatically.
 type: application
-version: 1.1.1
-appVersion: 1.1.1
+version: 1.1.2
+appVersion: 1.1.2
 keywords:
   - spark
   - kubernetes
