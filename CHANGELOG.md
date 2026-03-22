@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.3](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.1.2...v1.1.3) (2026-03-22)
+
+
+### Bug Fixes
+
+* add extraEnv support to helm chart ([b7d1104](https://github.com/unaiur/k8s-spark-ui-assist/commit/b7d11047b4b616780be66e5146a1c0de956875e4))
+
 ## [1.1.2](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.1.1...v1.1.2) (2026-03-22)
 
 
