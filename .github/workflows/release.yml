@@ -23,16 +23,6 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          skip-github-release: true
-
-      - name: Tag release
-        if: steps.release.outputs.release_created == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add gh-token "https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
-          git tag -a "${{ steps.release.outputs.tag_name }}" "${{ steps.release.outputs.sha }}" -m "Release ${{ steps.release.outputs.tag_name }}"
-          git push gh-token "${{ steps.release.outputs.tag_name }}"
 
   publish:
     name: Build and publish Docker image and Helm chart
