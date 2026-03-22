@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.1.1...v1.1.2) (2026-03-22)
+
+
+### Bug Fixes
+
+* create git tag in workflow since GitHub Releases API is blocked by token permissions ([cd9f165](https://github.com/unaiur/k8s-spark-ui-assist/commit/cd9f1657defec281aef2d64977d9e59c7ab68d63))
+
 ## [1.1.1](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.1.0...v1.1.1) (2026-03-22)
 
 
