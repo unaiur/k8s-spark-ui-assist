@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.1](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.1.0...v1.1.1) (2026-03-22)
+
+
+### Bug Fixes
+
+* docker and helm artifacts were not published on release ([1c71a93](https://github.com/unaiur/k8s-spark-ui-assist/commit/1c71a93d5ec9098ab06a3fefce285817bd93c30a))
+* docker and helm artifacts were not published on release ([e79f3cb](https://github.com/unaiur/k8s-spark-ui-assist/commit/e79f3cb9c44e32750e21e4e4e6f5d2feae8b6f2a))
+* move release-please config under packages key so version files are updated ([87afffb](https://github.com/unaiur/k8s-spark-ui-assist/commit/87afffbd52c75061b1714da398d29757fd2ebfb2))
+* update chart version and appVersion to 1.1.0 ([45f7abb](https://github.com/unaiur/k8s-spark-ui-assist/commit/45f7abb2b2952b188e0eb904dd7008b458c49dbf))
+
 ## [1.1.0](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.0.0...v1.1.0) (2026-03-22)
 
 
