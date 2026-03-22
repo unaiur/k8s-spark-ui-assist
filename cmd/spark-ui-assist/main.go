@@ -9,10 +9,9 @@ import (
 	"syscall"
 	"time"
 
-	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	gatewayclient "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned"
 
 	"github.com/unaiur/k8s-spark-ui-assist/internal/config"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/httproute"
@@ -29,9 +28,9 @@ func main() {
 		log.Fatalf("failed to build Kubernetes config: %v", err)
 	}
 
-	k8sClient, err := kubernetes.NewForConfig(restCfg)
+	dynClient, err := dynamic.NewForConfig(restCfg)
 	if err != nil {
-		log.Fatalf("failed to create Kubernetes client: %v", err)
+		log.Fatalf("failed to create dynamic client: %v", err)
 	}
 
 	s := store.New()
@@ -41,18 +40,13 @@ func main() {
 
 	var routeHandler watcher.Handler
 	if cfg.HTTPRoute.Enabled {
-		gwClient, err := gatewayclient.NewForConfig(restCfg)
-		if err != nil {
-			log.Fatalf("failed to create Gateway API client: %v", err)
-		}
-		mgr := httproute.New(gwClient, cfg.Namespace, cfg.HTTPRoute)
-
+		mgr := httproute.New(dynClient, cfg.Namespace, cfg.HTTPRoute)
 		// Ensure routes for already-running drivers once the informer has synced;
 		// handled via OnAdd callbacks triggered by the initial List.
 		routeHandler = &httpRouteHandler{ctx: ctx, mgr: mgr}
 	}
 
-	lw := watcher.NewListerWatcher(cfg.Namespace, k8sClient.CoreV1().RESTClient())
+	lw := watcher.NewListerWatcher(cfg.Namespace, dynClient)
 
 	go watcher.Watch(ctx, lw, s, routeHandler)
 

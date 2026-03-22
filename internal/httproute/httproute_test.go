@@ -6,12 +6,31 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	fakegw "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/fake"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	"github.com/unaiur/k8s-spark-ui-assist/internal/config"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/httproute"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/store"
 )
+
+var httpRouteGVR = schema.GroupVersionResource{
+	Group:    "gateway.networking.k8s.io",
+	Version:  "v1",
+	Resource: "httproutes",
+}
+
+// newScheme returns a minimal scheme that knows about HTTPRoute and HTTPRouteList.
+func newScheme() *runtime.Scheme {
+	s := runtime.NewScheme()
+	gvk := schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}
+	listGVK := schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRouteList"}
+	s.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(listGVK, &unstructured.UnstructuredList{})
+	return s
+}
 
 func newDriver() store.Driver {
 	return store.Driver{
@@ -22,7 +41,7 @@ func newDriver() store.Driver {
 	}
 }
 
-func newManager(client *fakegw.Clientset) *httproute.Manager {
+func newManager(client *dynamicfake.FakeDynamicClient) *httproute.Manager {
 	cfg := config.HTTPRouteConfig{
 		Enabled:          true,
 		Hostname:         "spark.example.com",
@@ -33,24 +52,24 @@ func newManager(client *fakegw.Clientset) *httproute.Manager {
 }
 
 func TestEnsureCreatesRoute(t *testing.T) {
-	client := fakegw.NewSimpleClientset()
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
 	mgr := newManager(client)
 	ctx := context.Background()
 	d := newDriver()
 
 	mgr.Ensure(ctx, d)
 
-	route, err := client.GatewayV1().HTTPRoutes("default").Get(ctx, d.AppSelector+"-ui-route", metav1.GetOptions{})
+	route, err := client.Resource(httpRouteGVR).Namespace("default").Get(ctx, d.AppSelector+"-ui-route", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("expected HTTPRoute to exist: %v", err)
 	}
-	if route.Name != d.AppSelector+"-ui-route" {
-		t.Errorf("unexpected route name: %s", route.Name)
+	if route.GetName() != d.AppSelector+"-ui-route" {
+		t.Errorf("unexpected route name: %s", route.GetName())
 	}
 }
 
 func TestEnsureIdempotent(t *testing.T) {
-	client := fakegw.NewSimpleClientset()
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
 	mgr := newManager(client)
 	ctx := context.Background()
 	d := newDriver()
@@ -59,7 +78,7 @@ func TestEnsureIdempotent(t *testing.T) {
 	// Second call should not error or create a duplicate.
 	mgr.Ensure(ctx, d)
 
-	routes, err := client.GatewayV1().HTTPRoutes("default").List(ctx, metav1.ListOptions{})
+	routes, err := client.Resource(httpRouteGVR).Namespace("default").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		t.Fatalf("list error: %v", err)
 	}
@@ -69,7 +88,7 @@ func TestEnsureIdempotent(t *testing.T) {
 }
 
 func TestDeleteRoute(t *testing.T) {
-	client := fakegw.NewSimpleClientset()
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
 	mgr := newManager(client)
 	ctx := context.Background()
 	d := newDriver()
@@ -77,7 +96,7 @@ func TestDeleteRoute(t *testing.T) {
 	mgr.Ensure(ctx, d)
 	mgr.Delete(ctx, d.AppSelector)
 
-	routes, err := client.GatewayV1().HTTPRoutes("default").List(ctx, metav1.ListOptions{})
+	routes, err := client.Resource(httpRouteGVR).Namespace("default").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		t.Fatalf("list error: %v", err)
 	}

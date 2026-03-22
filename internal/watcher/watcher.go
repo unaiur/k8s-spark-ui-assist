@@ -4,10 +4,14 @@ package watcher
 import (
 	"context"
 	"log"
+	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/unaiur/k8s-spark-ui-assist/internal/store"
@@ -23,6 +27,8 @@ const (
 	roleValue     = "driver"
 )
 
+var podGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
+
 // Handler is called when a Spark driver pod is added or removed.
 type Handler interface {
 	OnAdd(d store.Driver)
@@ -34,10 +40,10 @@ type Handler interface {
 func Watch(ctx context.Context, lw cache.ListerWatcher, s *store.Store, h Handler) {
 	_, informer := cache.NewInformerWithOptions(cache.InformerOptions{
 		ListerWatcher: lw,
-		ObjectType:    &corev1.Pod{},
+		ObjectType:    &unstructured.Unstructured{},
 		Handler: cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
-				pod, ok := obj.(*corev1.Pod)
+				pod, ok := obj.(*unstructured.Unstructured)
 				if !ok {
 					return
 				}
@@ -54,7 +60,7 @@ func Watch(ctx context.Context, lw cache.ListerWatcher, s *store.Store, h Handle
 				}
 			},
 			UpdateFunc: func(_, newObj interface{}) {
-				pod, ok := newObj.(*corev1.Pod)
+				pod, ok := newObj.(*unstructured.Unstructured)
 				if !ok {
 					return
 				}
@@ -62,9 +68,9 @@ func Watch(ctx context.Context, lw cache.ListerWatcher, s *store.Store, h Handle
 					return
 				}
 				if isTerminated(pod) {
-					s.Remove(pod.Name)
+					s.Remove(pod.GetName())
 					if h != nil {
-						h.OnRemove(pod.Labels[labelSelector])
+						h.OnRemove(pod.GetLabels()[labelSelector])
 					}
 					return
 				}
@@ -75,7 +81,7 @@ func Watch(ctx context.Context, lw cache.ListerWatcher, s *store.Store, h Handle
 				}
 			},
 			DeleteFunc: func(obj interface{}) {
-				pod, ok := obj.(*corev1.Pod)
+				pod, ok := obj.(*unstructured.Unstructured)
 				if !ok {
 					// Handle DeletedFinalStateUnknown tombstone.
 					tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
@@ -83,7 +89,7 @@ func Watch(ctx context.Context, lw cache.ListerWatcher, s *store.Store, h Handle
 						log.Printf("watcher: unexpected object type on delete: %T", obj)
 						return
 					}
-					pod, ok = tombstone.Obj.(*corev1.Pod)
+					pod, ok = tombstone.Obj.(*unstructured.Unstructured)
 					if !ok {
 						log.Printf("watcher: tombstone contained unexpected type: %T", tombstone.Obj)
 						return
@@ -92,9 +98,9 @@ func Watch(ctx context.Context, lw cache.ListerWatcher, s *store.Store, h Handle
 				if !isSparkDriver(pod) {
 					return
 				}
-				s.Remove(pod.Name)
+				s.Remove(pod.GetName())
 				if h != nil {
-					h.OnRemove(pod.Labels[labelSelector])
+					h.OnRemove(pod.GetLabels()[labelSelector])
 				}
 			},
 		},
@@ -104,29 +110,41 @@ func Watch(ctx context.Context, lw cache.ListerWatcher, s *store.Store, h Handle
 }
 
 // NewListerWatcher returns a ListerWatcher scoped to Spark driver pods in the given namespace.
-func NewListerWatcher(namespace string, client cache.Getter) cache.ListerWatcher {
+func NewListerWatcher(namespace string, client dynamic.Interface) cache.ListerWatcher {
 	labelSel := labelInstance + "=" + instanceValue + "," + labelRole + "=" + roleValue
-	optsMod := func(opts *metav1.ListOptions) {
-		opts.LabelSelector = labelSel
-		opts.FieldSelector = fields.Everything().String()
+	rc := client.Resource(podGVR).Namespace(namespace)
+	return &cache.ListWatch{
+		ListFunc: func(opts metav1.ListOptions) (runtime.Object, error) {
+			opts.LabelSelector = labelSel
+			return rc.List(context.Background(), opts)
+		},
+		WatchFunc: func(opts metav1.ListOptions) (watch.Interface, error) {
+			opts.LabelSelector = labelSel
+			return rc.Watch(context.Background(), opts)
+		},
 	}
-	return cache.NewFilteredListWatchFromClient(client, "pods", namespace, optsMod)
 }
 
-func isSparkDriver(pod *corev1.Pod) bool {
-	return pod.Labels[labelInstance] == instanceValue && pod.Labels[labelRole] == roleValue
+func isSparkDriver(pod *unstructured.Unstructured) bool {
+	labels := pod.GetLabels()
+	return labels[labelInstance] == instanceValue && labels[labelRole] == roleValue
 }
 
-func isTerminated(pod *corev1.Pod) bool {
-	phase := pod.Status.Phase
-	return phase == corev1.PodSucceeded || phase == corev1.PodFailed
+func isTerminated(pod *unstructured.Unstructured) bool {
+	phase, _, _ := unstructured.NestedString(pod.Object, "status", "phase")
+	return phase == "Succeeded" || phase == "Failed"
 }
 
-func driverFromPod(pod *corev1.Pod) store.Driver {
+func driverFromPod(pod *unstructured.Unstructured) store.Driver {
+	labels := pod.GetLabels()
+	createdAt := pod.GetCreationTimestamp().Time
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
 	return store.Driver{
-		PodName:     pod.Name,
-		CreatedAt:   pod.CreationTimestamp.Time,
-		AppSelector: pod.Labels[labelSelector],
-		AppName:     pod.Labels[labelAppName],
+		PodName:     pod.GetName(),
+		CreatedAt:   createdAt,
+		AppSelector: labels[labelSelector],
+		AppName:     labels[labelAppName],
 	}
 }
