@@ -41,14 +41,48 @@ The following labels are read for display purposes:
 
 ## Running
 
-### In-cluster (recommended)
+### Helm (recommended)
+
+A Helm chart is provided in the `chart/` directory. It creates the Deployment,
+ClusterIP Service, ServiceAccount, RBAC Role + RoleBinding, and an HTTPRoute that
+exposes `/` through your gateway.
+
+```sh
+helm install spark-assist ./chart \
+  --namespace spark --create-namespace \
+  --set httpHostname=spark.example.com \
+  --set httpGatewayName=main-gateway \
+  --set httpGatewayNamespace=gateway-system
+```
+
+All three Gateway parameters are required; the chart fails with a clear error if any
+are omitted.
+
+#### Helm values
+
+| Value | Default | Description |
+|---|---|---|
+| `httpHostname` | _(required)_ | Hostname for the service HTTPRoute and all Spark driver HTTPRoutes (`spec.hostnames[0]`) |
+| `httpGatewayName` | _(required)_ | Gateway name for all HTTPRoutes (`spec.parentRefs[0].name`) |
+| `httpGatewayNamespace` | _(required)_ | Gateway namespace for all HTTPRoutes (`spec.parentRefs[0].namespace`) |
+| `image.repository` | `ghcr.io/unaiur/k8s-spark-ui-assist` | Container image repository |
+| `image.tag` | chart `appVersion` | Image tag |
+| `image.pullPolicy` | `IfNotPresent` | Image pull policy |
+| `replicaCount` | `1` | Number of replicas |
+| `resources` | `requests: 32Mi/10m`, `limits: 64Mi/100m` | Pod resource requests and limits |
+| `service.type` | `ClusterIP` | Kubernetes Service type |
+| `service.port` | `80` | Service port |
+| `serviceAccount.name` | release fullname | Override the ServiceAccount name |
+| `serviceAccount.annotations` | `{}` | Extra annotations (e.g. for IRSA / Workload Identity) |
+
+### In-cluster without Helm
 
 Deploy the service in the same namespace as your Spark jobs. It auto-detects the namespace
 from the service account token.
 
 ```sh
 docker build -t k8s-spark-ui-assist:latest .
-# push to your registry, then deploy via your preferred method (Deployment, Helm, etc.)
+# push to your registry, then apply your own manifests
 ```
 
 The HTTP server listens on **port 8080**.

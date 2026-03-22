@@ -1,0 +1,61 @@
+# Required: Gateway API parameters shared by the service HTTPRoute and all
+# Spark driver HTTPRoutes.
+httpHostname: ""          # e.g. spark.example.com
+httpGatewayName: ""       # e.g. main-gateway
+httpGatewayNamespace: ""  # e.g. gateway-system
+
+# Container image.
+image:
+  repository: ghcr.io/unaiur/k8s-spark-ui-assist
+  # Defaults to the chart appVersion when not set.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Number of replicas. The service is stateless and can be scaled up for
+# high availability, but a single replica is sufficient for most use cases.
+replicaCount: 1
+
+# Resource requests and limits.
+# See DESIGN.md for the memory footprint analysis.
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi
+
+# Service configuration.
+service:
+  type: ClusterIP
+  port: 80
+  # targetPort must match the container port (8080).
+  targetPort: 8080
+
+# ServiceAccount configuration.
+serviceAccount:
+  # Name of the ServiceAccount to create. Defaults to the release fullname.
+  name: ""
+  # Additional annotations on the ServiceAccount (e.g. for IRSA / Workload Identity).
+  annotations: {}
+
+# Pod annotations.
+podAnnotations: {}
+
+# Pod security context.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532   # matches distroless nonroot
+
+# Container security context.
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# Node selector, tolerations and affinity.
+nodeSelector: {}
+tolerations: []
+affinity: {}

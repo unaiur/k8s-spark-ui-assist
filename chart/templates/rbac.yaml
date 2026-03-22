@@ -1,0 +1,32 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "k8s-spark-ui-assist.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "k8s-spark-ui-assist.labels" . | nindent 4 }}
+rules:
+  # Watch Spark driver pods to build the live job list.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "watch"]
+  # Manage per-driver HTTPRoutes (create on pod start, delete on pod finish).
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes"]
+    verbs: ["get", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "k8s-spark-ui-assist.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "k8s-spark-ui-assist.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "k8s-spark-ui-assist.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "k8s-spark-ui-assist.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
