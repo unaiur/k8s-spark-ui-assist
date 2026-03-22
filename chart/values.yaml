@@ -62,3 +62,9 @@ affinity: {}
 
 # Extra environment variables to set on the container.
 extraEnv: []
+
+# Extra volumes to mount in the container.
+extraVolumeMounts: []
+
+# Extra volumes to add to the pod.
+extraVolumes: []
