@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.0](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.3.2...v1.4.0) (2026-03-23)
+
+
+### Features
+
+* single shared HTTPRoute for dashboard and all Spark driver UIs ([#16](https://github.com/unaiur/k8s-spark-ui-assist/issues/16)) ([c85db6d](https://github.com/unaiur/k8s-spark-ui-assist/commit/c85db6d7b92b4fd60e5a7b518d3f11bed027a7dc))
+
+
+### Bug Fixes
+
+* redirect non-root requests to '/' in dashboard handler ([#18](https://github.com/unaiur/k8s-spark-ui-assist/issues/18)) ([35a1628](https://github.com/unaiur/k8s-spark-ui-assist/commit/35a16288ca466e44fe2d781122ef25c6a1df24eb))
+
 ## [1.3.2](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.3.1...v1.3.2) (2026-03-23)
 
 
