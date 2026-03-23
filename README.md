@@ -15,15 +15,14 @@ them hard to bookmark or share.
 2. Maintaining a live list of running jobs.
 3. Serving a single web page at `/` that links to every active Spark UI, showing how long
    each job has been running.
-4. Optionally creating a [Gateway API](https://gateway-api.sigs.k8s.io/) `HTTPRoute` for
+4. Creating a [Gateway API](https://gateway-api.sigs.k8s.io/) `HTTPRoute` for
    each driver as it starts, and deleting it when the job finishes, so the UIs are
    reachable through a shared gateway hostname without extra manual steps.
 
 ## Requirements
 
 - Kubernetes cluster with RBAC permissions to `list` and `watch` pods in the service namespace.
-- (Optional) [Gateway API](https://gateway-api.sigs.k8s.io/) CRDs installed and a running
-  gateway, if HTTPRoute management is enabled.
+- [Gateway API](https://gateway-api.sigs.k8s.io/) CRDs installed and a running gateway.
 
 Spark driver pods must carry these two labels for the service to recognise them:
 
@@ -100,13 +99,12 @@ The service falls back to your local `~/.kube/config` when it is not running ins
 | Flag | Default | Description |
 |---|---|---|
 | `-namespace` | auto-detected from service account | Kubernetes namespace to watch |
-| `-http-route.enabled` | `false` | Enable automatic HTTPRoute management |
-| `-http-route.hostname` | _(required when enabled)_ | Hostname placed in `spec.hostnames[0]` |
-| `-http-route.gateway-name` | _(required when enabled)_ | Gateway name for `spec.parentRefs[0].name` |
-| `-http-route.gateway-namespace` | _(required when enabled)_ | Gateway namespace for `spec.parentRefs[0].namespace` |
+| `-http-route.hostname` | _(required)_ | Hostname placed in `spec.hostnames[0]` |
+| `-http-route.gateway-name` | _(required)_ | Gateway name for `spec.parentRefs[0].name` |
+| `-http-route.gateway-namespace` | _(required)_ | Gateway namespace for `spec.parentRefs[0].namespace` |
 
-When `-http-route.enabled=true`, all three `-http-route.*` flags are required; the service
-exits immediately with an error listing the missing flags if any are omitted.
+All three `-http-route.*` flags are required; the service exits immediately with an error
+listing the missing flags if any are omitted.
 
 ## Web UI
 

@@ -44,8 +44,8 @@ internal/
 ### `internal/config`
 
 Parses command-line flags. After `flag.Parse()` it calls `HTTPRouteConfig.Validate()`,
-which returns an error listing every missing field when `http-route.enabled=true`.
-The service exits immediately with a usage message if validation fails.
+which returns an error listing every missing required field. The service exits immediately
+with a usage message if validation fails.
 
 The in-cluster namespace is read from
 `/var/run/secrets/kubernetes.io/serviceaccount/namespace`; it falls back to `"default"`
@@ -111,9 +111,7 @@ and shut down cleanly on `SIGTERM`/`SIGINT`.
 
 ### `internal/httproute`
 
-Optional feature, activated by `-http-route.enabled=true`.
-
-Also uses the **dynamic client** (`dynamic.Interface`), building HTTPRoute objects as
+Uses the **dynamic client** (`dynamic.Interface`), building HTTPRoute objects as
 `*unstructured.Unstructured` maps against the GVR
 `gateway.networking.k8s.io/v1/httproutes`. This avoids importing
 `sigs.k8s.io/gateway-api` and its type registrations entirely.
@@ -149,7 +147,7 @@ main()
   ├─ config.Parse()                   parse & validate flags
   ├─ dynamic.NewForConfig()           single dynamic client for all API calls
   ├─ store.New()                      empty driver map
-  ├─ (optional) httproute.New()       build HTTPRoute manager
+  ├─ httproute.New()                  build HTTPRoute manager
   ├─ watcher.NewListerWatcher()       scoped list/watch (dynamic client)
   ├─ go watcher.Watch()               starts informer loop
   └─ http.ListenAndServe(:8080)       serves until SIGTERM/SIGINT
