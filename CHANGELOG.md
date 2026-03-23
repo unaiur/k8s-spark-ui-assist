@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.4.1...v1.5.0) (2026-03-23)
+
+
+### Features
+
+* make driver path prefix configurable (default /proxy/) ([#21](https://github.com/unaiur/k8s-spark-ui-assist/issues/21)) ([8033f31](https://github.com/unaiur/k8s-spark-ui-assist/commit/8033f31d185d3c6056046eed1066c575d4f5d9d6))
+
 ## [1.4.1](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.4.0...v1.4.1) (2026-03-23)
 
 
