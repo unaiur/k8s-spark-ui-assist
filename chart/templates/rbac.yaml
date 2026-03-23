@@ -10,10 +10,11 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["list", "watch"]
-  # Manage per-driver HTTPRoutes (create on pod start, delete on pod finish).
+  # Patch the shared HTTPRoute to add/remove per-driver rules.
+  # The route itself is owned by Helm; the service only updates spec.rules.
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["httproutes"]
-    verbs: ["get", "create", "delete"]
+    verbs: ["get", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
