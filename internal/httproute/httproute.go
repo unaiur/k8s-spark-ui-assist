@@ -1,12 +1,15 @@
-// Package httproute manages a single shared Gateway API HTTPRoute for all Spark driver UIs.
+// Package httproute manages per-driver rules inside a shared Gateway API HTTPRoute.
 //
-// Instead of one HTTPRoute per driver, a single HTTPRoute named "<release>-spark-ui-routes"
-// (or whatever the Manager is configured with) holds one rule per active driver.
-// Ensure adds a rule for a driver if it is not already present; Delete removes the rule
-// for a driver and deletes the whole HTTPRoute when the last rule is gone.
+// The HTTPRoute itself is created and owned by the Helm chart.  It contains a
+// permanent catch-all rule (path "/") that routes traffic to the dashboard
+// service.  The Manager adds one path-prefix rule per active Spark driver
+// (path "/live/<appSelector>") and removes it when the driver stops.
 //
-// The update loop retries on conflict to handle concurrent writers using optimistic
-// concurrency (resourceVersion).
+// Because driver rules must be evaluated before the catch-all, they are always
+// inserted before the last rule in the route's rule list.
+//
+// Reconcile() should be called once the pod informer has fully synced so that
+// stale rules left over from a previous instance of the service are cleaned up.
 package httproute
 
 import (
@@ -31,182 +34,182 @@ var httpRouteGVR = schema.GroupVersionResource{
 
 const maxRetries = 5
 
-// Manager maintains a single shared HTTPRoute for all active Spark driver UIs.
+// Manager adds and removes per-driver rules inside the shared HTTPRoute.
 type Manager struct {
 	client    dynamic.Interface
 	namespace string
-	routeName string
 	cfg       config.HTTPRouteConfig
 }
 
-// New creates a new Manager.
-// routeName is the name of the shared HTTPRoute resource that will be created/managed.
+// New creates a new Manager. The shared HTTPRoute must already exist (created
+// by the Helm chart); its name is taken from cfg.RouteName.
 func New(client dynamic.Interface, namespace string, cfg config.HTTPRouteConfig) *Manager {
-	return &Manager{
-		client:    client,
-		namespace: namespace,
-		routeName: "spark-ui-routes",
-		cfg:       cfg,
-	}
+	return &Manager{client: client, namespace: namespace, cfg: cfg}
 }
 
-// Ensure adds a routing rule for the given driver to the shared HTTPRoute.
-// If the shared HTTPRoute does not exist yet it is created. If a rule for the
-// driver already exists the call is a no-op. The operation retries on conflict.
+// Ensure adds a routing rule for the given driver to the shared HTTPRoute if
+// one is not already present. The rule is inserted before the catch-all rule.
+// The operation retries on conflict.
 func (m *Manager) Ensure(ctx context.Context, d store.Driver) {
 	rc := m.client.Resource(httpRouteGVR).Namespace(m.namespace)
 
 	for attempt := range maxRetries {
-		route, err := rc.Get(ctx, m.routeName, metav1.GetOptions{})
-		if errors.IsNotFound(err) {
-			// Route does not exist yet – create it with the single rule for this driver.
-			newRoute := m.buildRoute([]interface{}{m.buildRule(d)})
-			_, createErr := rc.Create(ctx, newRoute, metav1.CreateOptions{})
-			if createErr == nil {
-				log.Printf("httproute: created shared HTTPRoute %s with rule for %s", m.routeName, d.AppSelector)
-				return
-			}
-			if errors.IsAlreadyExists(createErr) {
-				// Lost a race with another goroutine; retry the loop to add our rule.
-				log.Printf("httproute: concurrent create detected for %s, retrying (attempt %d)", m.routeName, attempt+1)
-				continue
-			}
-			log.Printf("httproute: failed to create HTTPRoute %s: %v", m.routeName, createErr)
-			return
-		}
+		route, err := rc.Get(ctx, m.cfg.RouteName, metav1.GetOptions{})
 		if err != nil {
-			log.Printf("httproute: failed to get HTTPRoute %s: %v", m.routeName, err)
+			log.Printf("httproute: failed to get HTTPRoute %s: %v", m.cfg.RouteName, err)
 			return
 		}
 
-		// Route exists – check whether a rule for this driver is already present.
 		rules := getRules(route)
 		for _, r := range rules {
 			if ruleMatchesDriver(r, d.AppSelector) {
-				// Already present; nothing to do.
-				return
+				return // already present
 			}
 		}
 
-		// Append a new rule and update.
-		newRules := append(rules, m.buildRule(d))
+		// Insert the new driver rule before the last (catch-all) rule.
+		newRule := buildDriverRule(d)
+		newRules := insertBeforeLast(rules, newRule)
 		setRules(route, newRules)
 
 		_, updateErr := rc.Update(ctx, route, metav1.UpdateOptions{})
 		if updateErr == nil {
-			log.Printf("httproute: added rule for %s to HTTPRoute %s", d.AppSelector, m.routeName)
+			log.Printf("httproute: added rule for %s to HTTPRoute %s", d.AppSelector, m.cfg.RouteName)
 			return
 		}
 		if errors.IsConflict(updateErr) {
-			log.Printf("httproute: conflict updating %s, retrying (attempt %d)", m.routeName, attempt+1)
+			log.Printf("httproute: conflict updating %s, retrying (attempt %d)", m.cfg.RouteName, attempt+1)
 			continue
 		}
-		log.Printf("httproute: failed to update HTTPRoute %s: %v", m.routeName, updateErr)
+		log.Printf("httproute: failed to update HTTPRoute %s: %v", m.cfg.RouteName, updateErr)
 		return
 	}
 
 	log.Printf("httproute: gave up adding rule for %s after %d retries", d.AppSelector, maxRetries)
 }
 
-// Delete removes the routing rule for the given appSelector from the shared HTTPRoute.
-// If the HTTPRoute has no remaining rules after removal it is deleted entirely.
+// Delete removes the routing rule for the given appSelector from the shared
+// HTTPRoute. It is a no-op if no such rule exists. The HTTPRoute itself is
+// never deleted — it is owned by the Helm chart.
 // The operation retries on conflict.
 func (m *Manager) Delete(ctx context.Context, appSelector string) {
 	rc := m.client.Resource(httpRouteGVR).Namespace(m.namespace)
 
 	for attempt := range maxRetries {
-		route, err := rc.Get(ctx, m.routeName, metav1.GetOptions{})
+		route, err := rc.Get(ctx, m.cfg.RouteName, metav1.GetOptions{})
 		if errors.IsNotFound(err) {
-			// Nothing to do.
-			return
+			return // nothing to do
 		}
 		if err != nil {
-			log.Printf("httproute: failed to get HTTPRoute %s: %v", m.routeName, err)
+			log.Printf("httproute: failed to get HTTPRoute %s: %v", m.cfg.RouteName, err)
 			return
 		}
 
 		rules := getRules(route)
-		filtered := make([]interface{}, 0, len(rules))
-		for _, r := range rules {
-			if !ruleMatchesDriver(r, appSelector) {
-				filtered = append(filtered, r)
-			}
-		}
-
+		filtered := removeDriverRule(rules, appSelector)
 		if len(filtered) == len(rules) {
-			// Rule was not present; nothing to do.
-			return
+			return // rule was not present
 		}
 
-		if len(filtered) == 0 {
-			// No rules remain – delete the whole HTTPRoute.
-			deleteErr := rc.Delete(ctx, m.routeName, metav1.DeleteOptions{})
-			if deleteErr == nil {
-				log.Printf("httproute: deleted shared HTTPRoute %s (no rules remaining)", m.routeName)
-				return
-			}
-			if errors.IsNotFound(deleteErr) {
-				return
-			}
-			log.Printf("httproute: failed to delete HTTPRoute %s: %v", m.routeName, deleteErr)
-			return
-		}
-
-		// Update the route with the filtered rule list.
 		setRules(route, filtered)
 		_, updateErr := rc.Update(ctx, route, metav1.UpdateOptions{})
 		if updateErr == nil {
-			log.Printf("httproute: removed rule for %s from HTTPRoute %s", appSelector, m.routeName)
+			log.Printf("httproute: removed rule for %s from HTTPRoute %s", appSelector, m.cfg.RouteName)
 			return
 		}
 		if errors.IsConflict(updateErr) {
-			log.Printf("httproute: conflict updating %s, retrying (attempt %d)", m.routeName, attempt+1)
+			log.Printf("httproute: conflict updating %s, retrying (attempt %d)", m.cfg.RouteName, attempt+1)
 			continue
 		}
-		log.Printf("httproute: failed to update HTTPRoute %s: %v", m.routeName, updateErr)
+		log.Printf("httproute: failed to update HTTPRoute %s: %v", m.cfg.RouteName, updateErr)
 		return
 	}
 
 	log.Printf("httproute: gave up removing rule for %s after %d retries", appSelector, maxRetries)
 }
 
-// buildRoute constructs a new shared HTTPRoute with the given rules slice.
-func (m *Manager) buildRoute(rules []interface{}) *unstructured.Unstructured {
-	return &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "gateway.networking.k8s.io/v1",
-			"kind":       "HTTPRoute",
-			"metadata": map[string]interface{}{
-				"name":      m.routeName,
-				"namespace": m.namespace,
-			},
-			"spec": map[string]interface{}{
-				"parentRefs": []interface{}{
-					map[string]interface{}{
-						"name":      m.cfg.GatewayName,
-						"namespace": m.cfg.GatewayNamespace,
-						"port":      int64(443),
-					},
-				},
-				"hostnames": []interface{}{m.cfg.Hostname},
-				"rules":     rules,
-			},
-		},
+// Reconcile synchronises the driver rules in the shared HTTPRoute against the
+// provided list of currently active drivers. It removes rules for drivers that
+// are no longer active and adds rules for drivers that are missing one.
+// Call this once after the pod informer has fully synced.
+func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) {
+	rc := m.client.Resource(httpRouteGVR).Namespace(m.namespace)
+
+	for attempt := range maxRetries {
+		route, err := rc.Get(ctx, m.cfg.RouteName, metav1.GetOptions{})
+		if err != nil {
+			log.Printf("httproute: reconcile: failed to get HTTPRoute %s: %v", m.cfg.RouteName, err)
+			return
+		}
+
+		// Build lookup sets.
+		activeSet := make(map[string]store.Driver, len(active))
+		for _, d := range active {
+			activeSet[d.AppSelector] = d
+		}
+
+		rules := getRules(route)
+
+		// Keep non-driver (catch-all) rules and driver rules for active drivers.
+		kept := make([]interface{}, 0, len(rules))
+		presentSelectors := make(map[string]bool)
+		changed := false
+		for _, r := range rules {
+			sel := driverSelector(r)
+			if sel == "" {
+				// Not a driver rule (e.g. the catch-all); always keep.
+				kept = append(kept, r)
+				continue
+			}
+			if _, ok := activeSet[sel]; ok {
+				kept = append(kept, r)
+				presentSelectors[sel] = true
+			} else {
+				log.Printf("httproute: reconcile: removing stale rule for %s", sel)
+				changed = true
+			}
+		}
+
+		// Add rules for active drivers that are not yet present.
+		// Insert them before the last (catch-all) rule.
+		for _, d := range active {
+			if !presentSelectors[d.AppSelector] {
+				log.Printf("httproute: reconcile: adding missing rule for %s", d.AppSelector)
+				kept = insertBeforeLast(kept, buildDriverRule(d))
+				changed = true
+			}
+		}
+
+		// Skip the update if nothing changed.
+		if !changed {
+			log.Printf("httproute: reconcile: HTTPRoute %s is already up to date", m.cfg.RouteName)
+			return
+		}
+
+		setRules(route, kept)
+		_, updateErr := rc.Update(ctx, route, metav1.UpdateOptions{})
+		if updateErr == nil {
+			log.Printf("httproute: reconcile: updated HTTPRoute %s", m.cfg.RouteName)
+			return
+		}
+		if errors.IsConflict(updateErr) {
+			log.Printf("httproute: reconcile: conflict updating %s, retrying (attempt %d)", m.cfg.RouteName, attempt+1)
+			continue
+		}
+		log.Printf("httproute: reconcile: failed to update HTTPRoute %s: %v", m.cfg.RouteName, updateErr)
+		return
 	}
+
+	log.Printf("httproute: reconcile: gave up after %d retries", maxRetries)
 }
 
-// buildRule returns a single HTTPRoute rule for the given driver.
-// The rule uses the spark-app-selector as the path prefix component so we can
-// identify and remove it later without needing additional annotations.
-func (m *Manager) buildRule(d store.Driver) interface{} {
+// buildDriverRule returns a single HTTPRoute rule for the given driver.
+// The path value "/live/<appSelector>" acts as the unique key for the rule.
+func buildDriverRule(d store.Driver) interface{} {
 	pathPrefix := "/live/" + d.AppSelector
 	svcName := d.AppName + "-ui-svc"
 
 	return map[string]interface{}{
-		// Store the appSelector in a way we can recover it for matching.
-		// We encode it as a header match on an internal header that will
-		// never actually be present – but the path match itself is unique
-		// enough: we key on the path value, which equals "/live/<appSelector>".
 		"matches": []interface{}{
 			map[string]interface{}{
 				"path": map[string]interface{}{
@@ -235,21 +238,50 @@ func (m *Manager) buildRule(d store.Driver) interface{} {
 	}
 }
 
-// ruleMatchesDriver returns true when the rule's path prefix value encodes the
-// given appSelector (i.e. the path is "/live/<appSelector>").
-func ruleMatchesDriver(rule interface{}, appSelector string) bool {
+// driverSelector returns the appSelector encoded in the rule's path value
+// ("/live/<appSelector>"), or "" if the rule is not a driver rule.
+func driverSelector(rule interface{}) string {
 	r, ok := rule.(map[string]interface{})
 	if !ok {
-		return false
+		return ""
 	}
 	matches, _, _ := unstructured.NestedSlice(r, "matches")
 	for _, m := range matches {
 		val, _, _ := unstructured.NestedString(m.(map[string]interface{}), "path", "value")
-		if val == "/live/"+appSelector {
-			return true
+		if len(val) > len("/live/") && val[:6] == "/live/" {
+			return val[6:]
 		}
 	}
-	return false
+	return ""
+}
+
+// ruleMatchesDriver returns true when the rule belongs to appSelector.
+func ruleMatchesDriver(rule interface{}, appSelector string) bool {
+	return driverSelector(rule) == appSelector
+}
+
+// removeDriverRule returns a copy of rules with the rule for appSelector removed.
+func removeDriverRule(rules []interface{}, appSelector string) []interface{} {
+	out := make([]interface{}, 0, len(rules))
+	for _, r := range rules {
+		if !ruleMatchesDriver(r, appSelector) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// insertBeforeLast inserts elem before the last element of rules.
+// If rules is empty the element becomes the only element.
+func insertBeforeLast(rules []interface{}, elem interface{}) []interface{} {
+	if len(rules) == 0 {
+		return []interface{}{elem}
+	}
+	out := make([]interface{}, 0, len(rules)+1)
+	out = append(out, rules[:len(rules)-1]...)
+	out = append(out, elem)
+	out = append(out, rules[len(rules)-1])
+	return out
 }
 
 // getRules extracts the spec.rules slice from an HTTPRoute object.
