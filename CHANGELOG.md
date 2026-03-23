@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.4.0...v1.4.1) (2026-03-23)
+
+
+### Bug Fixes
+
+* grant update (not create/delete) on httproutes in RBAC ([#19](https://github.com/unaiur/k8s-spark-ui-assist/issues/19)) ([c17a450](https://github.com/unaiur/k8s-spark-ui-assist/commit/c17a450df702209ff158da4c1f8d155ed236bfbf))
+
 ## [1.4.0](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.3.2...v1.4.0) (2026-03-23)
 
 
