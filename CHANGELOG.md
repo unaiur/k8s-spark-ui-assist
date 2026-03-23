@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.2](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.3.1...v1.3.2) (2026-03-23)
+
+
+### Bug Fixes
+
+* push Helm chart to separate OCI path to avoid collision with Docker image ([#14](https://github.com/unaiur/k8s-spark-ui-assist/issues/14)) ([a92f2d7](https://github.com/unaiur/k8s-spark-ui-assist/commit/a92f2d7e9cadc9ec2bdf1e5198d77386eb45289c))
+
 ## [1.3.1](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.3.0...v1.3.1) (2026-03-23)
 
 
