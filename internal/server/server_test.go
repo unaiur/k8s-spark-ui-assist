@@ -68,7 +68,7 @@ func TestHandlerRootServesPage(t *testing.T) {
 }
 
 // TestHandlerNonRootRedirects checks that any path other than "/" gets a
-// 301 redirect to "/".
+// 302 redirect to "/".
 func TestHandlerNonRootRedirects(t *testing.T) {
 	paths := []string{"/foo", "/live/spark-abc/", "/anything"}
 	s := newStore()
