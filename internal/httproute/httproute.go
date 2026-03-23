@@ -51,41 +51,14 @@ func New(client dynamic.Interface, namespace string, cfg config.HTTPRouteConfig)
 // one is not already present. The rule is inserted before the catch-all rule.
 // The operation retries on conflict.
 func (m *Manager) Ensure(ctx context.Context, d store.Driver) {
-	rc := m.client.Resource(httpRouteGVR).Namespace(m.namespace)
-
-	for attempt := range maxRetries {
-		route, err := rc.Get(ctx, m.cfg.RouteName, metav1.GetOptions{})
-		if err != nil {
-			log.Printf("httproute: failed to get HTTPRoute %s: %v", m.cfg.RouteName, err)
-			return
-		}
-
-		rules := getRules(route)
+	m.updateWithRetry(ctx, "add rule for "+d.AppSelector, func(rules []interface{}) []interface{} {
 		for _, r := range rules {
 			if ruleMatchesDriver(r, d.AppSelector) {
-				return // already present
+				return nil // already present, no update needed
 			}
 		}
-
-		// Insert the new driver rule before the last (catch-all) rule.
-		newRule := buildDriverRule(d)
-		newRules := insertBeforeLast(rules, newRule)
-		setRules(route, newRules)
-
-		_, updateErr := rc.Update(ctx, route, metav1.UpdateOptions{})
-		if updateErr == nil {
-			log.Printf("httproute: added rule for %s to HTTPRoute %s", d.AppSelector, m.cfg.RouteName)
-			return
-		}
-		if errors.IsConflict(updateErr) {
-			log.Printf("httproute: conflict updating %s, retrying (attempt %d)", m.cfg.RouteName, attempt+1)
-			continue
-		}
-		log.Printf("httproute: failed to update HTTPRoute %s: %v", m.cfg.RouteName, updateErr)
-		return
-	}
-
-	log.Printf("httproute: gave up adding rule for %s after %d retries", d.AppSelector, maxRetries)
+		return insertBeforeLast(rules, buildDriverRule(d))
+	})
 }
 
 // Delete removes the routing rule for the given appSelector from the shared
@@ -93,39 +66,13 @@ func (m *Manager) Ensure(ctx context.Context, d store.Driver) {
 // never deleted — it is owned by the Helm chart.
 // The operation retries on conflict.
 func (m *Manager) Delete(ctx context.Context, appSelector string) {
-	rc := m.client.Resource(httpRouteGVR).Namespace(m.namespace)
-
-	for attempt := range maxRetries {
-		route, err := rc.Get(ctx, m.cfg.RouteName, metav1.GetOptions{})
-		if errors.IsNotFound(err) {
-			return // nothing to do
-		}
-		if err != nil {
-			log.Printf("httproute: failed to get HTTPRoute %s: %v", m.cfg.RouteName, err)
-			return
-		}
-
-		rules := getRules(route)
+	m.updateWithRetry(ctx, "remove rule for "+appSelector, func(rules []interface{}) []interface{} {
 		filtered := removeDriverRule(rules, appSelector)
 		if len(filtered) == len(rules) {
-			return // rule was not present
+			return nil // rule was not present, no update needed
 		}
-
-		setRules(route, filtered)
-		_, updateErr := rc.Update(ctx, route, metav1.UpdateOptions{})
-		if updateErr == nil {
-			log.Printf("httproute: removed rule for %s from HTTPRoute %s", appSelector, m.cfg.RouteName)
-			return
-		}
-		if errors.IsConflict(updateErr) {
-			log.Printf("httproute: conflict updating %s, retrying (attempt %d)", m.cfg.RouteName, attempt+1)
-			continue
-		}
-		log.Printf("httproute: failed to update HTTPRoute %s: %v", m.cfg.RouteName, updateErr)
-		return
-	}
-
-	log.Printf("httproute: gave up removing rule for %s after %d retries", appSelector, maxRetries)
+		return filtered
+	})
 }
 
 // Reconcile synchronises the driver rules in the shared HTTPRoute against the
@@ -133,32 +80,20 @@ func (m *Manager) Delete(ctx context.Context, appSelector string) {
 // are no longer active and adds rules for drivers that are missing one.
 // Call this once after the pod informer has fully synced.
 func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) {
-	rc := m.client.Resource(httpRouteGVR).Namespace(m.namespace)
+	activeSet := make(map[string]store.Driver, len(active))
+	for _, d := range active {
+		activeSet[d.AppSelector] = d
+	}
 
-	for attempt := range maxRetries {
-		route, err := rc.Get(ctx, m.cfg.RouteName, metav1.GetOptions{})
-		if err != nil {
-			log.Printf("httproute: reconcile: failed to get HTTPRoute %s: %v", m.cfg.RouteName, err)
-			return
-		}
-
-		// Build lookup sets.
-		activeSet := make(map[string]store.Driver, len(active))
-		for _, d := range active {
-			activeSet[d.AppSelector] = d
-		}
-
-		rules := getRules(route)
-
-		// Keep non-driver (catch-all) rules and driver rules for active drivers.
+	m.updateWithRetry(ctx, "reconcile", func(rules []interface{}) []interface{} {
 		kept := make([]interface{}, 0, len(rules))
 		presentSelectors := make(map[string]bool)
 		changed := false
+
 		for _, r := range rules {
 			sel := driverSelector(r)
 			if sel == "" {
-				// Not a driver rule (e.g. the catch-all); always keep.
-				kept = append(kept, r)
+				kept = append(kept, r) // catch-all or other non-driver rule; always keep
 				continue
 			}
 			if _, ok := activeSet[sel]; ok {
@@ -170,8 +105,6 @@ func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) {
 			}
 		}
 
-		// Add rules for active drivers that are not yet present.
-		// Insert them before the last (catch-all) rule.
 		for _, d := range active {
 			if !presentSelectors[d.AppSelector] {
 				log.Printf("httproute: reconcile: adding missing rule for %s", d.AppSelector)
@@ -180,27 +113,50 @@ func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) {
 			}
 		}
 
-		// Skip the update if nothing changed.
 		if !changed {
-			log.Printf("httproute: reconcile: HTTPRoute %s is already up to date", m.cfg.RouteName)
+			return nil // already up to date
+		}
+		return kept
+	})
+}
+
+// updateWithRetry fetches the shared HTTPRoute, calls mutate with the current
+// rules, and writes the result back. If mutate returns nil the update is
+// skipped. Conflicts are retried up to maxRetries times.
+// op is a short description used in log messages.
+func (m *Manager) updateWithRetry(ctx context.Context, op string, mutate func([]interface{}) []interface{}) {
+	rc := m.client.Resource(httpRouteGVR).Namespace(m.namespace)
+
+	for attempt := range maxRetries {
+		route, err := rc.Get(ctx, m.cfg.RouteName, metav1.GetOptions{})
+		if errors.IsNotFound(err) {
+			return // route doesn't exist; nothing to do
+		}
+		if err != nil {
+			log.Printf("httproute: %s: failed to get HTTPRoute %s: %v", op, m.cfg.RouteName, err)
 			return
 		}
 
-		setRules(route, kept)
+		newRules := mutate(getRules(route))
+		if newRules == nil {
+			return // mutator signalled no change needed
+		}
+
+		setRules(route, newRules)
 		_, updateErr := rc.Update(ctx, route, metav1.UpdateOptions{})
 		if updateErr == nil {
-			log.Printf("httproute: reconcile: updated HTTPRoute %s", m.cfg.RouteName)
+			log.Printf("httproute: %s: updated HTTPRoute %s", op, m.cfg.RouteName)
 			return
 		}
 		if errors.IsConflict(updateErr) {
-			log.Printf("httproute: reconcile: conflict updating %s, retrying (attempt %d)", m.cfg.RouteName, attempt+1)
+			log.Printf("httproute: %s: conflict, retrying (attempt %d)", op, attempt+1)
 			continue
 		}
-		log.Printf("httproute: reconcile: failed to update HTTPRoute %s: %v", m.cfg.RouteName, updateErr)
+		log.Printf("httproute: %s: failed to update HTTPRoute %s: %v", op, m.cfg.RouteName, updateErr)
 		return
 	}
 
-	log.Printf("httproute: reconcile: gave up after %d retries", maxRetries)
+	log.Printf("httproute: %s: gave up after %d retries", op, maxRetries)
 }
 
 // buildDriverRule returns a single HTTPRoute rule for the given driver.
