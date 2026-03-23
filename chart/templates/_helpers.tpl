@@ -73,13 +73,29 @@ Container image reference.
 Validate that the required Gateway API values are set.
 */}}
 {{- define "k8s-spark-ui-assist.validateGateway" -}}
-{{- if not .Values.httpHostname }}
+{{- if not (tpl .Values.httpHostname .) }}
 {{- fail "values.httpHostname is required" }}
 {{- end }}
-{{- if not .Values.httpGatewayName }}
+{{- if not (tpl .Values.httpGatewayName .) }}
 {{- fail "values.httpGatewayName is required" }}
 {{- end }}
-{{- if not .Values.httpGatewayNamespace }}
+{{- if not (tpl .Values.httpGatewayNamespace .) }}
 {{- fail "values.httpGatewayNamespace is required" }}
 {{- end }}
+{{- end }}
+
+{{/*
+Gateway API value helpers — expand via tpl so parent charts can pass
+global variable references (e.g. "{{ .Values.global.domain }}").
+*/}}
+{{- define "k8s-spark-ui-assist.httpHostname" -}}
+{{- tpl .Values.httpHostname . }}
+{{- end }}
+
+{{- define "k8s-spark-ui-assist.httpGatewayName" -}}
+{{- tpl .Values.httpGatewayName . }}
+{{- end }}
+
+{{- define "k8s-spark-ui-assist.httpGatewayNamespace" -}}
+{{- tpl .Values.httpGatewayNamespace . }}
 {{- end }}

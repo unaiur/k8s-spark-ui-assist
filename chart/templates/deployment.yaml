@@ -34,9 +34,9 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           args:
-            - -http-route.hostname={{ required "httpHostname is required" .Values.httpHostname }}
-            - -http-route.gateway-name={{ required "httpGatewayName is required" .Values.httpGatewayName }}
-            - -http-route.gateway-namespace={{ required "httpGatewayNamespace is required" .Values.httpGatewayNamespace }}
+            - -http-route.hostname={{ include "k8s-spark-ui-assist.httpHostname" . }}
+            - -http-route.gateway-name={{ include "k8s-spark-ui-assist.httpGatewayName" . }}
+            - -http-route.gateway-namespace={{ include "k8s-spark-ui-assist.httpGatewayNamespace" . }}
           ports:
             - name: http
               containerPort: 8080
