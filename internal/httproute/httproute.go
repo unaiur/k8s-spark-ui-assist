@@ -14,6 +14,7 @@ package httproute
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -137,12 +138,22 @@ func (m *Manager) updateWithRetry(ctx context.Context, op string, mutate func([]
 			return
 		}
 
-		newRules := mutate(getRules(route))
+		rules, err := getRules(route)
+		if err != nil {
+			log.Printf("httproute: %s: %v", op, err)
+			return
+		}
+
+		newRules := mutate(rules)
 		if newRules == nil {
 			return // mutator signalled no change needed
 		}
 
-		setRules(route, newRules)
+		if err := setRules(route, newRules); err != nil {
+			log.Printf("httproute: %s: %v", op, err)
+			return
+		}
+
 		_, updateErr := rc.Update(ctx, route, metav1.UpdateOptions{})
 		if updateErr == nil {
 			log.Printf("httproute: %s: updated HTTPRoute %s", op, m.cfg.RouteName)
@@ -203,7 +214,11 @@ func driverSelector(rule interface{}) string {
 	}
 	matches, _, _ := unstructured.NestedSlice(r, "matches")
 	for _, m := range matches {
-		val, _, _ := unstructured.NestedString(m.(map[string]interface{}), "path", "value")
+		mMap, ok := m.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		val, _, _ := unstructured.NestedString(mMap, "path", "value")
 		if len(val) > len("/live/") && val[:6] == "/live/" {
 			return val[6:]
 		}
@@ -241,12 +256,23 @@ func insertBeforeLast(rules []interface{}, elem interface{}) []interface{} {
 }
 
 // getRules extracts the spec.rules slice from an HTTPRoute object.
-func getRules(route *unstructured.Unstructured) []interface{} {
-	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
-	return rules
+// Returns an error if the field is missing or has an unexpected type.
+func getRules(route *unstructured.Unstructured) ([]interface{}, error) {
+	rules, found, err := unstructured.NestedSlice(route.Object, "spec", "rules")
+	if err != nil {
+		return nil, fmt.Errorf("error reading spec.rules from HTTPRoute %s/%s: %w", route.GetNamespace(), route.GetName(), err)
+	}
+	if !found {
+		return nil, fmt.Errorf("spec.rules not found on HTTPRoute %s/%s", route.GetNamespace(), route.GetName())
+	}
+	return rules, nil
 }
 
 // setRules replaces the spec.rules slice on an HTTPRoute object.
-func setRules(route *unstructured.Unstructured, rules []interface{}) {
-	_ = unstructured.SetNestedSlice(route.Object, rules, "spec", "rules")
+// Returns an error if the field cannot be set.
+func setRules(route *unstructured.Unstructured, rules []interface{}) error {
+	if err := unstructured.SetNestedSlice(route.Object, rules, "spec", "rules"); err != nil {
+		return fmt.Errorf("error writing spec.rules on HTTPRoute %s/%s: %w", route.GetNamespace(), route.GetName(), err)
+	}
+	return nil
 }

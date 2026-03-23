@@ -113,7 +113,13 @@ func getRules(t *testing.T, client *dynamicfake.FakeDynamicClient) []interface{}
 	if err != nil {
 		t.Fatalf("getRules: could not get HTTPRoute: %v", err)
 	}
-	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+	rules, found, err := unstructured.NestedSlice(route.Object, "spec", "rules")
+	if err != nil {
+		t.Fatalf("getRules: spec.rules has unexpected type: %v", err)
+	}
+	if !found {
+		t.Fatalf("getRules: spec.rules not found on HTTPRoute")
+	}
 	return rules
 }
 
@@ -127,7 +133,11 @@ func driverRules(rules []interface{}) []interface{} {
 		}
 		matches, _, _ := unstructured.NestedSlice(rm, "matches")
 		for _, m := range matches {
-			val, _, _ := unstructured.NestedString(m.(map[string]interface{}), "path", "value")
+			mMap, ok := m.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			val, _, _ := unstructured.NestedString(mMap, "path", "value")
 			if len(val) > 6 && val[:6] == "/live/" {
 				out = append(out, r)
 			}
