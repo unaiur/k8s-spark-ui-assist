@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.1](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.3.0...v1.3.1) (2026-03-23)
+
+
+### Bug Fixes
+
+* add CMD ["--help"] to Dockerfile so bare image run prints usage ([0fae370](https://github.com/unaiur/k8s-spark-ui-assist/commit/0fae3701336529cd3e3d682cf33228932139898c))
+* add explicit command to deployment to avoid missing ENTRYPOINT in older images ([89b44ca](https://github.com/unaiur/k8s-spark-ui-assist/commit/89b44ca0608a552539333d894bff901c3fb950f1))
+
 ## [1.3.0](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.2.0...v1.3.0) (2026-03-23)
 
 
