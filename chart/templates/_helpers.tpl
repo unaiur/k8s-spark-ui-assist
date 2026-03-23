@@ -73,13 +73,13 @@ Container image reference.
 Validate that the required Gateway API values are set.
 */}}
 {{- define "k8s-spark-ui-assist.validateGateway" -}}
-{{- if not (tpl .Values.httpHostname .) }}
+{{- if not (tpl (.Values.httpHostname | default "") .) }}
 {{- fail "values.httpHostname is required" }}
 {{- end }}
-{{- if not (tpl .Values.httpGatewayName .) }}
+{{- if not (tpl (.Values.httpGatewayName | default "") .) }}
 {{- fail "values.httpGatewayName is required" }}
 {{- end }}
-{{- if not (tpl .Values.httpGatewayNamespace .) }}
+{{- if not (tpl (.Values.httpGatewayNamespace | default "") .) }}
 {{- fail "values.httpGatewayNamespace is required" }}
 {{- end }}
 {{- end }}
@@ -89,13 +89,13 @@ Gateway API value helpers — expand via tpl so parent charts can pass
 global variable references (e.g. "{{ .Values.global.domain }}").
 */}}
 {{- define "k8s-spark-ui-assist.httpHostname" -}}
-{{- tpl .Values.httpHostname . }}
+{{- tpl (.Values.httpHostname | default "") . }}
 {{- end }}
 
 {{- define "k8s-spark-ui-assist.httpGatewayName" -}}
-{{- tpl .Values.httpGatewayName . }}
+{{- tpl (.Values.httpGatewayName | default "") . }}
 {{- end }}
 
 {{- define "k8s-spark-ui-assist.httpGatewayNamespace" -}}
-{{- tpl .Values.httpGatewayNamespace . }}
+{{- tpl (.Values.httpGatewayNamespace | default "") . }}
 {{- end }}
