@@ -15,6 +15,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "all fields set — valid",
 			cfg: HTTPRouteConfig{
+				RouteName:        "my-release-spark-ui-assist",
 				Hostname:         "spark.example.com",
 				GatewayName:      "main-gw",
 				GatewayNamespace: "gateway-ns",
@@ -25,11 +26,22 @@ func TestValidate(t *testing.T) {
 			name:    "all fields missing",
 			cfg:     HTTPRouteConfig{},
 			wantErr: true,
-			wantMsg: "http-route.hostname, http-route.gateway-name, http-route.gateway-namespace",
+			wantMsg: "http-route.name, http-route.hostname, http-route.gateway-name, http-route.gateway-namespace",
+		},
+		{
+			name: "route-name missing",
+			cfg: HTTPRouteConfig{
+				Hostname:         "spark.example.com",
+				GatewayName:      "main-gw",
+				GatewayNamespace: "gateway-ns",
+			},
+			wantErr: true,
+			wantMsg: "http-route.name",
 		},
 		{
 			name: "hostname missing",
 			cfg: HTTPRouteConfig{
+				RouteName:        "my-release-spark-ui-assist",
 				GatewayName:      "main-gw",
 				GatewayNamespace: "gateway-ns",
 			},
@@ -39,6 +51,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "gateway-name missing",
 			cfg: HTTPRouteConfig{
+				RouteName:        "my-release-spark-ui-assist",
 				Hostname:         "spark.example.com",
 				GatewayNamespace: "gateway-ns",
 			},
@@ -48,6 +61,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "gateway-namespace missing",
 			cfg: HTTPRouteConfig{
+				RouteName:   "my-release-spark-ui-assist",
 				Hostname:    "spark.example.com",
 				GatewayName: "main-gw",
 			},

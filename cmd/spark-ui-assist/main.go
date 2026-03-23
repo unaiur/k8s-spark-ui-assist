@@ -45,7 +45,11 @@ func main() {
 
 	lw := watcher.NewListerWatcher(cfg.Namespace, dynClient)
 
-	go watcher.Watch(ctx, lw, s, routeHandler)
+	onSynced := func() {
+		log.Printf("httproute: informer synced, reconciling routes")
+		mgr.Reconcile(ctx, s.List())
+	}
+	go watcher.Watch(ctx, lw, s, routeHandler, onSynced)
 
 	mux := http.NewServeMux()
 	mux.Handle("/", server.Handler(s, time.Now))

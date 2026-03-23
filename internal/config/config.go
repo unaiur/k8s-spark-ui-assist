@@ -20,6 +20,9 @@ type Config struct {
 
 // HTTPRouteConfig holds configuration for the HTTPRoute creation feature.
 type HTTPRouteConfig struct {
+	// RouteName is the name of the shared HTTPRoute managed by Helm.
+	// The Go service adds and removes per-driver rules from this route.
+	RouteName        string
 	Hostname         string
 	GatewayName      string
 	GatewayNamespace string
@@ -32,6 +35,7 @@ func Parse() *Config {
 	defaultNS := inClusterNamespace()
 
 	flag.StringVar(&cfg.Namespace, "namespace", defaultNS, "Kubernetes namespace to watch")
+	flag.StringVar(&cfg.HTTPRoute.RouteName, "http-route.name", "", "Name of the shared HTTPRoute managed by Helm")
 	flag.StringVar(&cfg.HTTPRoute.Hostname, "http-route.hostname", "", "Hostname to set in HTTPRoute spec.hostnames[0]")
 	flag.StringVar(&cfg.HTTPRoute.GatewayName, "http-route.gateway-name", "", "Gateway name for HTTPRoute spec.parentRefs[0].name")
 	flag.StringVar(&cfg.HTTPRoute.GatewayNamespace, "http-route.gateway-namespace", "", "Gateway namespace for HTTPRoute spec.parentRefs[0].namespace")
@@ -50,6 +54,9 @@ func Parse() *Config {
 // Returns a non-nil error describing any missing fields.
 func (c *HTTPRouteConfig) Validate() error {
 	var missing []string
+	if c.RouteName == "" {
+		missing = append(missing, "http-route.name")
+	}
 	if c.Hostname == "" {
 		missing = append(missing, "http-route.hostname")
 	}

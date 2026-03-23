@@ -37,8 +37,10 @@ type Handler interface {
 
 // Watch lists existing Spark driver pods and then watches for changes.
 // It blocks until ctx is cancelled.
-func Watch(ctx context.Context, lw cache.ListerWatcher, s *store.Store, h Handler) {
-	_, informer := cache.NewInformerWithOptions(cache.InformerOptions{
+// onSynced, if non-nil, is called once after the initial pod list has been
+// processed (i.e. after all existing pods have fired AddFunc).
+func Watch(ctx context.Context, lw cache.ListerWatcher, s *store.Store, h Handler, onSynced func()) {
+	store, informer := cache.NewInformerWithOptions(cache.InformerOptions{
 		ListerWatcher: lw,
 		ObjectType:    &unstructured.Unstructured{},
 		Handler: cache.ResourceEventHandlerFuncs{
@@ -105,6 +107,15 @@ func Watch(ctx context.Context, lw cache.ListerWatcher, s *store.Store, h Handle
 			},
 		},
 	})
+	_ = store // used only for its HasSynced via the informer controller below
+
+	if onSynced != nil {
+		go func() {
+			if cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
+				onSynced()
+			}
+		}()
+	}
 
 	informer.Run(ctx.Done())
 }

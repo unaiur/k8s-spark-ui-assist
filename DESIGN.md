@@ -23,7 +23,7 @@ The following labels are read from each matching pod:
 
 | Label | Stored as |
 |---|---|
-| `spark-app-selector` | `Driver.AppSelector` — used in URLs and HTTPRoute names |
+| `spark-app-selector` | `Driver.AppSelector` — used in URLs and HTTPRoute rule paths |
 | `spark-app-name` | `Driver.AppName` — shown in the web UI |
 
 A pod is considered terminated (and removed from the list) when its phase is
@@ -37,7 +37,7 @@ internal/
   config/              flag parsing and validation
   store/               thread-safe in-memory driver map
   watcher/             Kubernetes informer for Spark driver pods
-  httproute/           Gateway API HTTPRoute create/delete
+  httproute/           Gateway API HTTPRoute rule management (shared route)
   server/              HTTP handler and duration formatting
 ```
 
@@ -106,23 +106,61 @@ type Handler interface {
 }
 ```
 
+`Watch` accepts an optional `onSynced func()` callback. After the informer's initial list
+is complete (i.e. `WaitForCacheSync` returns), the callback is fired in a goroutine. This
+is used by `main` to trigger `Reconcile` exactly once on startup.
+
 `Watch` blocks until the context is cancelled, which makes it easy to run in a goroutine
 and shut down cleanly on `SIGTERM`/`SIGINT`.
 
 ### `internal/httproute`
 
-Uses the **dynamic client** (`dynamic.Interface`), building HTTPRoute objects as
-`*unstructured.Unstructured` maps against the GVR
+Uses the **dynamic client** (`dynamic.Interface`), building HTTPRoute rule entries as
+plain `map[string]interface{}` values against the GVR
 `gateway.networking.k8s.io/v1/httproutes`. This avoids importing
 `sigs.k8s.io/gateway-api` and its type registrations entirely.
 
-`Manager.Ensure(ctx, driver)` performs a `Get` before `Create` to stay idempotent — if the
-route already exists it does nothing. `Manager.Delete(ctx, appSelector)` deletes by the
-computed name `<spark-app-selector>-ui-route`.
+#### Ownership model
 
-The generated `HTTPRoute` routes requests whose path starts with `/live/<spark-app-selector>`
-to the Spark UI service (`<spark-app-name>-ui-svc:4040`), rewriting the prefix to `/` so
-the Spark UI receives requests at its expected root path.
+The **Helm chart** creates and owns the single shared `HTTPRoute` (named after the Helm
+release). It contains a permanent catch-all rule that routes all traffic to the dashboard
+service. The Go service **never creates or deletes the HTTPRoute**; it only patches
+`spec.rules`.
+
+#### Rule ordering invariant
+
+Driver rules (`PathPrefix /live/<appSelector>`) must be evaluated before the catch-all
+(`PathPrefix /`). `insertBeforeLast` always inserts new driver rules immediately before
+the last element, keeping the catch-all rule at the end regardless of how many drivers
+are active.
+
+#### `Manager` methods
+
+| Method | Effect |
+|---|---|
+| `Ensure(ctx, driver)` | Adds a `/live/<appSelector>` rule for the driver if not already present. |
+| `Delete(ctx, appSelector)` | Removes the rule for `appSelector`. Never deletes the route itself. |
+| `Reconcile(ctx, active)` | Called once on startup after informer sync. Removes stale rules, adds missing ones. |
+
+Both `Ensure` and `Delete` are idempotent. All three methods call the shared
+`updateWithRetry` helper internally.
+
+#### `updateWithRetry`
+
+Executes a get → mutate → update loop with up to 5 conflict retries:
+
+1. `Get` the shared HTTPRoute.
+2. Extract `spec.rules` via `getRules`.
+3. Call the `mutate(rules) []interface{}` closure.  
+   If `mutate` returns `nil`, the update is skipped (no-op signal).
+4. Write the new rules back with `setRules`.
+5. `Update` the route; retry on `Conflict`.
+
+#### Path encoding
+
+A driver rule is identified by its path value `/live/<appSelector>`. `driverSelector`
+extracts the selector from a rule by inspecting `matches[*].path.value`; it returns `""`
+for non-driver rules (e.g. the catch-all `/`).
 
 ### `internal/server`
 
@@ -149,7 +187,8 @@ main()
   ├─ store.New()                      empty driver map
   ├─ httproute.New()                  build HTTPRoute manager
   ├─ watcher.NewListerWatcher()       scoped list/watch (dynamic client)
-  ├─ go watcher.Watch()               starts informer loop
+  ├─ go watcher.Watch(..., onSynced)  starts informer loop; fires onSynced after cache sync
+  │     └─ onSynced()                 mgr.Reconcile — removes stale rules, adds missing ones
   └─ http.ListenAndServe(:8080)       serves until SIGTERM/SIGINT
 ```
 
