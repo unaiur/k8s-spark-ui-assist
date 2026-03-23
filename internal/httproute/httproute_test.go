@@ -43,7 +43,6 @@ func newDriver() store.Driver {
 
 func newManager(client *dynamicfake.FakeDynamicClient) *httproute.Manager {
 	cfg := config.HTTPRouteConfig{
-		Enabled:          true,
 		Hostname:         "spark.example.com",
 		GatewayName:      "main-gateway",
 		GatewayNamespace: "gateway-ns",

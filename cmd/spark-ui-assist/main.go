@@ -38,13 +38,10 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	var routeHandler watcher.Handler
-	if cfg.HTTPRoute.Enabled {
-		mgr := httproute.New(dynClient, cfg.Namespace, cfg.HTTPRoute)
-		// Ensure routes for already-running drivers once the informer has synced;
-		// handled via OnAdd callbacks triggered by the initial List.
-		routeHandler = &httpRouteHandler{ctx: ctx, mgr: mgr}
-	}
+	mgr := httproute.New(dynClient, cfg.Namespace, cfg.HTTPRoute)
+	// Ensure routes for already-running drivers once the informer has synced;
+	// handled via OnAdd callbacks triggered by the initial List.
+	routeHandler := &httpRouteHandler{ctx: ctx, mgr: mgr}
 
 	lw := watcher.NewListerWatcher(cfg.Namespace, dynClient)
 

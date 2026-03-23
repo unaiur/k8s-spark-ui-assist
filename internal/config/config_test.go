@@ -13,14 +13,8 @@ func TestValidate(t *testing.T) {
 		wantMsg string
 	}{
 		{
-			name:    "disabled — always valid",
-			cfg:     HTTPRouteConfig{Enabled: false},
-			wantErr: false,
-		},
-		{
-			name: "enabled with all fields — valid",
+			name: "all fields set — valid",
 			cfg: HTTPRouteConfig{
-				Enabled:          true,
 				Hostname:         "spark.example.com",
 				GatewayName:      "main-gw",
 				GatewayNamespace: "gateway-ns",
@@ -28,15 +22,14 @@ func TestValidate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "enabled but all fields missing",
-			cfg:     HTTPRouteConfig{Enabled: true},
+			name:    "all fields missing",
+			cfg:     HTTPRouteConfig{},
 			wantErr: true,
 			wantMsg: "http-route.hostname, http-route.gateway-name, http-route.gateway-namespace",
 		},
 		{
-			name: "enabled but hostname missing",
+			name: "hostname missing",
 			cfg: HTTPRouteConfig{
-				Enabled:          true,
 				GatewayName:      "main-gw",
 				GatewayNamespace: "gateway-ns",
 			},
@@ -44,9 +37,8 @@ func TestValidate(t *testing.T) {
 			wantMsg: "http-route.hostname",
 		},
 		{
-			name: "enabled but gateway-name missing",
+			name: "gateway-name missing",
 			cfg: HTTPRouteConfig{
-				Enabled:          true,
 				Hostname:         "spark.example.com",
 				GatewayNamespace: "gateway-ns",
 			},
@@ -54,9 +46,8 @@ func TestValidate(t *testing.T) {
 			wantMsg: "http-route.gateway-name",
 		},
 		{
-			name: "enabled but gateway-namespace missing",
+			name: "gateway-namespace missing",
 			cfg: HTTPRouteConfig{
-				Enabled:     true,
 				Hostname:    "spark.example.com",
 				GatewayName: "main-gw",
 			},
