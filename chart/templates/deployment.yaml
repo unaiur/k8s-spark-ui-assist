@@ -33,6 +33,7 @@ spec:
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          command: ["/spark-ui-assist"]
           args:
             - -http-route.hostname={{ include "k8s-spark-ui-assist.httpHostname" . }}
             - -http-route.gateway-name={{ include "k8s-spark-ui-assist.httpGatewayName" . }}
