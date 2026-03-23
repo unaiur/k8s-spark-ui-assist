@@ -78,8 +78,8 @@ func TestHandlerNonRootRedirects(t *testing.T) {
 		rec := httptest.NewRecorder()
 		Handler(s, fixedNow).ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusMovedPermanently {
-			t.Errorf("path %q: expected 301, got %d", path, rec.Code)
+		if rec.Code != http.StatusFound {
+			t.Errorf("path %q: expected 302, got %d", path, rec.Code)
 		}
 		if loc := rec.Header().Get("Location"); loc != "/" {
 			t.Errorf("path %q: expected Location: /, got %q", path, loc)

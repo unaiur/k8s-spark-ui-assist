@@ -38,7 +38,7 @@ type driverView struct {
 func Handler(s *store.Store, now func() time.Time) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
-			http.Redirect(w, r, "/", http.StatusMovedPermanently)
+			http.Redirect(w, r, "/", http.StatusFound)
 			return
 		}
 
