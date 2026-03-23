@@ -5,6 +5,16 @@ import (
 	"testing"
 )
 
+func fullConfig() HTTPRouteConfig {
+	return HTTPRouteConfig{
+		RouteName:        "my-release-spark-ui-assist",
+		Hostname:         "spark.example.com",
+		GatewayName:      "main-gw",
+		GatewayNamespace: "gateway-ns",
+		DriverPathPrefix: "/proxy/",
+	}
+}
+
 func TestValidate(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -13,13 +23,8 @@ func TestValidate(t *testing.T) {
 		wantMsg string
 	}{
 		{
-			name: "all fields set — valid",
-			cfg: HTTPRouteConfig{
-				RouteName:        "my-release-spark-ui-assist",
-				Hostname:         "spark.example.com",
-				GatewayName:      "main-gw",
-				GatewayNamespace: "gateway-ns",
-			},
+			name:    "all fields set — valid",
+			cfg:     fullConfig(),
 			wantErr: false,
 		},
 		{
@@ -34,6 +39,7 @@ func TestValidate(t *testing.T) {
 				Hostname:         "spark.example.com",
 				GatewayName:      "main-gw",
 				GatewayNamespace: "gateway-ns",
+				DriverPathPrefix: "/proxy/",
 			},
 			wantErr: true,
 			wantMsg: "http-route.name",
@@ -44,6 +50,7 @@ func TestValidate(t *testing.T) {
 				RouteName:        "my-release-spark-ui-assist",
 				GatewayName:      "main-gw",
 				GatewayNamespace: "gateway-ns",
+				DriverPathPrefix: "/proxy/",
 			},
 			wantErr: true,
 			wantMsg: "http-route.hostname",
@@ -54,6 +61,7 @@ func TestValidate(t *testing.T) {
 				RouteName:        "my-release-spark-ui-assist",
 				Hostname:         "spark.example.com",
 				GatewayNamespace: "gateway-ns",
+				DriverPathPrefix: "/proxy/",
 			},
 			wantErr: true,
 			wantMsg: "http-route.gateway-name",
@@ -61,12 +69,23 @@ func TestValidate(t *testing.T) {
 		{
 			name: "gateway-namespace missing",
 			cfg: HTTPRouteConfig{
-				RouteName:   "my-release-spark-ui-assist",
-				Hostname:    "spark.example.com",
-				GatewayName: "main-gw",
+				RouteName:        "my-release-spark-ui-assist",
+				Hostname:         "spark.example.com",
+				GatewayName:      "main-gw",
+				DriverPathPrefix: "/proxy/",
 			},
 			wantErr: true,
 			wantMsg: "http-route.gateway-namespace",
+		},
+		{
+			name: "prefix without leading slash is invalid",
+			cfg: func() HTTPRouteConfig {
+				c := fullConfig()
+				c.DriverPathPrefix = "proxy/"
+				return c
+			}(),
+			wantErr: true,
+			wantMsg: "http-route.driver-path-prefix",
 		},
 	}
 
@@ -83,5 +102,18 @@ func TestValidate(t *testing.T) {
 				t.Errorf("error %q does not mention %q", err.Error(), tc.wantMsg)
 			}
 		})
+	}
+}
+
+// TestValidateNormalisesTrailingSlash verifies that a prefix without a trailing
+// slash is accepted and normalised by appending one.
+func TestValidateNormalisesTrailingSlash(t *testing.T) {
+	cfg := fullConfig()
+	cfg.DriverPathPrefix = "/proxy"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.DriverPathPrefix != "/proxy/" {
+		t.Errorf("expected DriverPathPrefix to be normalised to %q, got %q", "/proxy/", cfg.DriverPathPrefix)
 	}
 }

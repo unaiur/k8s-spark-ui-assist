@@ -52,7 +52,7 @@ func main() {
 	go watcher.Watch(ctx, lw, s, routeHandler, onSynced)
 
 	mux := http.NewServeMux()
-	mux.Handle("/", server.Handler(s, time.Now))
+	mux.Handle("/", server.Handler(s, time.Now, cfg.HTTPRoute.DriverPathPrefix))
 
 	srv := &http.Server{
 		Addr:    ":8080",

@@ -3,7 +3,7 @@
 // The HTTPRoute itself is created and owned by the Helm chart.  It contains a
 // permanent catch-all rule (path "/") that routes traffic to the dashboard
 // service.  The Manager adds one path-prefix rule per active Spark driver
-// (path "/live/<appSelector>") and removes it when the driver stops.
+// (path "<prefix><appSelector>") and removes it when the driver stops.
 //
 // Because driver rules must be evaluated before the catch-all, they are always
 // inserted before the last rule in the route's rule list.
@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -54,11 +55,11 @@ func New(client dynamic.Interface, namespace string, cfg config.HTTPRouteConfig)
 func (m *Manager) Ensure(ctx context.Context, d store.Driver) {
 	m.updateWithRetry(ctx, "add rule for "+d.AppSelector, func(rules []interface{}) []interface{} {
 		for _, r := range rules {
-			if ruleMatchesDriver(r, d.AppSelector) {
+			if ruleMatchesDriver(r, d.AppSelector, m.cfg.DriverPathPrefix) {
 				return nil // already present, no update needed
 			}
 		}
-		return insertBeforeLast(rules, buildDriverRule(d))
+		return insertBeforeLast(rules, buildDriverRule(d, m.cfg.DriverPathPrefix))
 	})
 }
 
@@ -68,7 +69,7 @@ func (m *Manager) Ensure(ctx context.Context, d store.Driver) {
 // The operation retries on conflict.
 func (m *Manager) Delete(ctx context.Context, appSelector string) {
 	m.updateWithRetry(ctx, "remove rule for "+appSelector, func(rules []interface{}) []interface{} {
-		filtered := removeDriverRule(rules, appSelector)
+		filtered := removeDriverRule(rules, appSelector, m.cfg.DriverPathPrefix)
 		if len(filtered) == len(rules) {
 			return nil // rule was not present, no update needed
 		}
@@ -92,7 +93,7 @@ func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) {
 		changed := false
 
 		for _, r := range rules {
-			sel := driverSelector(r)
+			sel := driverSelector(r, m.cfg.DriverPathPrefix)
 			if sel == "" {
 				kept = append(kept, r) // catch-all or other non-driver rule; always keep
 				continue
@@ -109,7 +110,7 @@ func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) {
 		for _, d := range active {
 			if !presentSelectors[d.AppSelector] {
 				log.Printf("httproute: reconcile: adding missing rule for %s", d.AppSelector)
-				kept = insertBeforeLast(kept, buildDriverRule(d))
+				kept = insertBeforeLast(kept, buildDriverRule(d, m.cfg.DriverPathPrefix))
 				changed = true
 			}
 		}
@@ -171,9 +172,9 @@ func (m *Manager) updateWithRetry(ctx context.Context, op string, mutate func([]
 }
 
 // buildDriverRule returns a single HTTPRoute rule for the given driver.
-// The path value "/live/<appSelector>" acts as the unique key for the rule.
-func buildDriverRule(d store.Driver) interface{} {
-	pathPrefix := "/live/" + d.AppSelector
+// The path value "<prefix><appSelector>" acts as the unique key for the rule.
+func buildDriverRule(d store.Driver, prefix string) interface{} {
+	pathPrefix := prefix + d.AppSelector
 	svcName := d.AppName + "-ui-svc"
 
 	return map[string]interface{}{
@@ -206,8 +207,8 @@ func buildDriverRule(d store.Driver) interface{} {
 }
 
 // driverSelector returns the appSelector encoded in the rule's path value
-// ("/live/<appSelector>"), or "" if the rule is not a driver rule.
-func driverSelector(rule interface{}) string {
+// ("<prefix><appSelector>"), or "" if the rule is not a driver rule.
+func driverSelector(rule interface{}, prefix string) string {
 	r, ok := rule.(map[string]interface{})
 	if !ok {
 		return ""
@@ -219,23 +220,23 @@ func driverSelector(rule interface{}) string {
 			continue
 		}
 		val, _, _ := unstructured.NestedString(mMap, "path", "value")
-		if len(val) > len("/live/") && val[:6] == "/live/" {
-			return val[6:]
+		if strings.HasPrefix(val, prefix) && len(val) > len(prefix) {
+			return val[len(prefix):]
 		}
 	}
 	return ""
 }
 
 // ruleMatchesDriver returns true when the rule belongs to appSelector.
-func ruleMatchesDriver(rule interface{}, appSelector string) bool {
-	return driverSelector(rule) == appSelector
+func ruleMatchesDriver(rule interface{}, appSelector string, prefix string) bool {
+	return driverSelector(rule, prefix) == appSelector
 }
 
 // removeDriverRule returns a copy of rules with the rule for appSelector removed.
-func removeDriverRule(rules []interface{}, appSelector string) []interface{} {
+func removeDriverRule(rules []interface{}, appSelector string, prefix string) []interface{} {
 	out := make([]interface{}, 0, len(rules))
 	for _, r := range rules {
-		if !ruleMatchesDriver(r, appSelector) {
+		if !ruleMatchesDriver(r, appSelector, prefix) {
 			out = append(out, r)
 		}
 	}

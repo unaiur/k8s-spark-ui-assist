@@ -2,6 +2,7 @@ package httproute_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,9 +24,10 @@ var httpRouteGVR = schema.GroupVersionResource{
 }
 
 const (
-	routeName   = "my-release-spark-ui-assist"
-	dashSvcName = "my-release-spark-ui-assist"
-	namespace   = "default"
+	routeName    = "my-release-spark-ui-assist"
+	dashSvcName  = "my-release-spark-ui-assist"
+	namespace    = "default"
+	driverPrefix = "/proxy/"
 )
 
 // newScheme returns a minimal scheme that knows about HTTPRoute and HTTPRouteList.
@@ -55,6 +57,7 @@ func newManager(client *dynamicfake.FakeDynamicClient) *httproute.Manager {
 		Hostname:         "spark.example.com",
 		GatewayName:      "main-gateway",
 		GatewayNamespace: "gateway-ns",
+		DriverPathPrefix: driverPrefix,
 	}
 	return httproute.New(client, namespace, cfg)
 }
@@ -138,7 +141,7 @@ func driverRules(rules []interface{}) []interface{} {
 				continue
 			}
 			val, _, _ := unstructured.NestedString(mMap, "path", "value")
-			if len(val) > 6 && val[:6] == "/live/" {
+			if strings.HasPrefix(val, driverPrefix) && len(val) > len(driverPrefix) {
 				out = append(out, r)
 			}
 		}
@@ -164,7 +167,7 @@ func TestEnsureAddsDriverRule(t *testing.T) {
 	first := rules[0].(map[string]interface{})
 	matches, _, _ := unstructured.NestedSlice(first, "matches")
 	pathVal, _, _ := unstructured.NestedString(matches[0].(map[string]interface{}), "path", "value")
-	if pathVal != "/live/spark-abc123" {
+	if pathVal != "/proxy/spark-abc123" {
 		t.Errorf("expected driver rule first, got path %q", pathVal)
 	}
 }
@@ -234,7 +237,7 @@ func TestDeleteRemovesDriverRule(t *testing.T) {
 	rm := dr[0].(map[string]interface{})
 	matches, _, _ := unstructured.NestedSlice(rm, "matches")
 	pathVal, _, _ := unstructured.NestedString(matches[0].(map[string]interface{}), "path", "value")
-	if pathVal != "/live/spark-bbb" {
+	if pathVal != "/proxy/spark-bbb" {
 		t.Errorf("expected surviving rule for spark-bbb, got %q", pathVal)
 	}
 }
@@ -303,7 +306,7 @@ func TestReconcileRemovesStaleRules(t *testing.T) {
 	rm := dr[0].(map[string]interface{})
 	matches, _, _ := unstructured.NestedSlice(rm, "matches")
 	pathVal, _, _ := unstructured.NestedString(matches[0].(map[string]interface{}), "path", "value")
-	if pathVal != "/live/spark-old2" {
+	if pathVal != "/proxy/spark-old2" {
 		t.Errorf("expected rule for spark-old2 to survive, got %q", pathVal)
 	}
 }
