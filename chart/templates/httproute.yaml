@@ -8,11 +8,11 @@ metadata:
     {{- include "k8s-spark-ui-assist.labels" . | nindent 4 }}
 spec:
   parentRefs:
-    - name: {{ .Values.httpGatewayName }}
-      namespace: {{ .Values.httpGatewayNamespace }}
+    - name: {{ include "k8s-spark-ui-assist.httpGatewayName" . }}
+      namespace: {{ include "k8s-spark-ui-assist.httpGatewayNamespace" . }}
       port: 443
   hostnames:
-    - {{ .Values.httpHostname | quote }}
+    - {{ include "k8s-spark-ui-assist.httpHostname" . | quote }}
   rules:
     - matches:
         - path:
