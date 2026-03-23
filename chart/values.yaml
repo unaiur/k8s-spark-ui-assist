@@ -4,6 +4,10 @@ httpHostname: ""          # e.g. spark.example.com
 httpGatewayName: ""       # e.g. main-gateway
 httpGatewayNamespace: ""  # e.g. gateway-system
 
+# Path prefix used for per-driver HTTPRoute rules and dashboard links.
+# Must start with /. A trailing / is appended automatically if omitted.
+httpDriverPathPrefix: "/proxy/"
+
 # Container image.
 image:
   repository: ghcr.io/unaiur/k8s-spark-ui-assist

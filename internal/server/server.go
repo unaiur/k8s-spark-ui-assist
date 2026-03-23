@@ -18,7 +18,7 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
 <h1>Running Spark Jobs</h1>
 <ul>
 {{- range .}}
-<li><a href="/live/{{.AppSelector}}/">{{.AppName}}</a> (running for {{.Duration}})</li>
+<li><a href="{{.URL}}">{{.AppName}}</a> (running for {{.Duration}})</li>
 {{- end}}
 </ul>
 </body>
@@ -26,16 +26,18 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
 `))
 
 type driverView struct {
-	AppSelector string
-	AppName     string
-	Duration    string
+	URL      string
+	AppName  string
+	Duration string
 }
 
 // Handler returns an http.Handler that serves the Spark driver list.
 // Requests whose URL path is not exactly "/" are redirected to "/" so that
 // relative links in the page resolve correctly regardless of how the gateway
 // routes traffic to this handler.
-func Handler(s *store.Store, now func() time.Time) http.Handler {
+// driverPathPrefix is the URL path prefix for per-driver links (e.g. "/proxy/");
+// it must start with "/" and end with "/" (the config.Validate method ensures this).
+func Handler(s *store.Store, now func() time.Time, driverPathPrefix string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.Redirect(w, r, "/", http.StatusFound)
@@ -52,9 +54,9 @@ func Handler(s *store.Store, now func() time.Time) http.Handler {
 		views := make([]driverView, 0, len(drivers))
 		for _, d := range drivers {
 			views = append(views, driverView{
-				AppSelector: d.AppSelector,
-				AppName:     d.AppName,
-				Duration:    FormatDuration(current.Sub(d.CreatedAt)),
+				URL:      driverPathPrefix + d.AppSelector + "/",
+				AppName:  d.AppName,
+				Duration: FormatDuration(current.Sub(d.CreatedAt)),
 			})
 		}
 

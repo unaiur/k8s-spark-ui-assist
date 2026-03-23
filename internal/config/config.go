@@ -26,6 +26,10 @@ type HTTPRouteConfig struct {
 	Hostname         string
 	GatewayName      string
 	GatewayNamespace string
+	// DriverPathPrefix is the URL path prefix used for per-driver rules,
+	// e.g. "/proxy/" produces paths like "/proxy/<appSelector>".
+	// Defaults to "/proxy/".
+	DriverPathPrefix string
 }
 
 // Parse reads configuration from command-line flags and returns a Config.
@@ -39,6 +43,7 @@ func Parse() *Config {
 	flag.StringVar(&cfg.HTTPRoute.Hostname, "http-route.hostname", "", "Hostname to set in HTTPRoute spec.hostnames[0]")
 	flag.StringVar(&cfg.HTTPRoute.GatewayName, "http-route.gateway-name", "", "Gateway name for HTTPRoute spec.parentRefs[0].name")
 	flag.StringVar(&cfg.HTTPRoute.GatewayNamespace, "http-route.gateway-namespace", "", "Gateway namespace for HTTPRoute spec.parentRefs[0].namespace")
+	flag.StringVar(&cfg.HTTPRoute.DriverPathPrefix, "http-route.driver-path-prefix", "/proxy/", "URL path prefix for per-driver HTTPRoute rules (e.g. /proxy/)")
 
 	flag.Parse()
 
@@ -68,6 +73,12 @@ func (c *HTTPRouteConfig) Validate() error {
 	}
 	if len(missing) > 0 {
 		return errors.New("missing required flags: " + strings.Join(missing, ", "))
+	}
+	if !strings.HasPrefix(c.DriverPathPrefix, "/") {
+		return errors.New("http-route.driver-path-prefix must start with '/'")
+	}
+	if !strings.HasSuffix(c.DriverPathPrefix, "/") {
+		c.DriverPathPrefix += "/"
 	}
 	return nil
 }
