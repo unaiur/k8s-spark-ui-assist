@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.1.5...v1.2.0) (2026-03-23)
+
+
+### Features
+
+* expand http gateway values with tpl to support global variable references ([#9](https://github.com/unaiur/k8s-spark-ui-assist/issues/9)) ([022b15e](https://github.com/unaiur/k8s-spark-ui-assist/commit/022b15e0f1923f0e300adf315498bccc418242a5))
+
 ## [1.1.5](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.1.4...v1.1.5) (2026-03-22)
 
 
