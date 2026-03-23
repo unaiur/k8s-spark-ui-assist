@@ -21,3 +21,4 @@ COPY --from=builder /spark-ui-assist /spark-ui-assist
 
 USER nonroot:nonroot
 ENTRYPOINT ["/spark-ui-assist"]
+CMD ["--help"]
