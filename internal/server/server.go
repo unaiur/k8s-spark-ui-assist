@@ -32,8 +32,16 @@ type driverView struct {
 }
 
 // Handler returns an http.Handler that serves the Spark driver list.
+// Requests whose URL path is not exactly "/" are redirected to "/" so that
+// relative links in the page resolve correctly regardless of how the gateway
+// routes traffic to this handler.
 func Handler(s *store.Store, now func() time.Time) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.Redirect(w, r, "/", http.StatusMovedPermanently)
+			return
+		}
+
 		drivers := s.List()
 		// Sort by creation time for stable output.
 		sort.Slice(drivers, func(i, j int) bool {

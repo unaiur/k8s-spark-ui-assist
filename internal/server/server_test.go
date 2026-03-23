@@ -1,8 +1,13 @@
 package server
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/unaiur/k8s-spark-ui-assist/internal/store"
 )
 
 func TestFormatDuration(t *testing.T) {
@@ -26,6 +31,58 @@ func TestFormatDuration(t *testing.T) {
 		got := FormatDuration(tc.d)
 		if got != tc.want {
 			t.Errorf("FormatDuration(%v) = %q, want %q", tc.d, got, tc.want)
+		}
+	}
+}
+
+func newStore(drivers ...store.Driver) *store.Store {
+	s := store.New()
+	for _, d := range drivers {
+		s.Add(d)
+	}
+	return s
+}
+
+func fixedNow() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+// TestHandlerRootServesPage checks that GET "/" returns 200 and the driver list.
+func TestHandlerRootServesPage(t *testing.T) {
+	s := newStore(store.Driver{
+		PodName:     "pod-1",
+		AppSelector: "spark-abc",
+		AppName:     "my-job",
+		CreatedAt:   fixedNow().Add(-time.Hour),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	Handler(s, fixedNow).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "/live/spark-abc/") {
+		t.Errorf("expected driver link in body, got:\n%s", body)
+	}
+}
+
+// TestHandlerNonRootRedirects checks that any path other than "/" gets a
+// 301 redirect to "/".
+func TestHandlerNonRootRedirects(t *testing.T) {
+	paths := []string{"/foo", "/live/spark-abc/", "/anything"}
+	s := newStore()
+
+	for _, path := range paths {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		Handler(s, fixedNow).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusMovedPermanently {
+			t.Errorf("path %q: expected 301, got %d", path, rec.Code)
+		}
+		if loc := rec.Header().Get("Location"); loc != "/" {
+			t.Errorf("path %q: expected Location: /, got %q", path, loc)
 		}
 	}
 }
