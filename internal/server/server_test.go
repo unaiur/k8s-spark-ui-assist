@@ -63,7 +63,7 @@ func TestHandlerRootServesPage(t *testing.T) {
 		t.Fatalf("expected 200 OK, got %d", rec.Code)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "/proxy/spark-abc/") {
+	if !strings.Contains(body, "/proxy/spark-abc/jobs/") {
 		t.Errorf("expected driver link with /proxy/ prefix in body, got:\n%s", body)
 	}
 }
@@ -82,7 +82,7 @@ func TestHandlerCustomPrefix(t *testing.T) {
 	Handler(s, fixedNow, "/live/").ServeHTTP(rec, req)
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "/live/spark-abc/") {
+	if !strings.Contains(body, "/live/spark-abc/jobs/") {
 		t.Errorf("expected driver link with /live/ prefix in body, got:\n%s", body)
 	}
 	if strings.Contains(body, "/proxy/") {

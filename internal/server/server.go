@@ -54,7 +54,7 @@ func Handler(s *store.Store, now func() time.Time, driverPathPrefix string) http
 		views := make([]driverView, 0, len(drivers))
 		for _, d := range drivers {
 			views = append(views, driverView{
-				URL:      driverPathPrefix + d.AppSelector + "/",
+				URL:      driverPathPrefix + d.AppSelector + "/jobs/",
 				AppName:  d.AppName,
 				Duration: FormatDuration(current.Sub(d.CreatedAt)),
 			})
