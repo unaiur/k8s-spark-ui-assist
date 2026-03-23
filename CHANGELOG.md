@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.5.0...v1.5.1) (2026-03-23)
+
+
+### Bug Fixes
+
+* append /jobs/ to driver links so Spark UI opens on the jobs page ([#23](https://github.com/unaiur/k8s-spark-ui-assist/issues/23)) ([ea24c8d](https://github.com/unaiur/k8s-spark-ui-assist/commit/ea24c8dde441c3d87ead4697f1a5505182ca0ab7))
+
 ## [1.5.0](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.4.1...v1.5.0) (2026-03-23)
 
 
