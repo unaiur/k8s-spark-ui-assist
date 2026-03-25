@@ -1,0 +1,174 @@
+// Package api implements the /proxy/api HTTP endpoints.
+//
+// Currently provided endpoints:
+//
+//	GET /proxy/api/{appID}
+//	  Returns a JSON object describing the state of the Spark driver pod
+//	  identified by the spark-app-selector={appID} label.  The same label
+//	  selector used by the watcher is applied so that only genuine Spark driver
+//	  pods are matched.
+//
+//	  Responses:
+//	    200  {"appID":"…","state":"…"}
+//	    404  {"error":"driver not found"}        – no matching pod
+//	    405  {"error":"method not allowed"}      – non-GET request
+//	    500  {"error":"…"}                       – Kubernetes API error
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+)
+
+// apiPrefix is the URL path prefix under which all API endpoints are mounted.
+const apiPrefix = "/proxy/api/"
+
+var podGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
+
+// The label selectors used to identify Spark driver pods — must stay in sync
+// with the watcher package.
+const (
+	labelInstance = "app.kubernetes.io/instance"
+	labelRole     = "spark-role"
+	labelSelector = "spark-app-selector"
+
+	instanceValue = "spark-job"
+	roleValue     = "driver"
+)
+
+// Handler returns an http.Handler that serves all /proxy/api/ endpoints.
+// namespace is the Kubernetes namespace to query for driver pods.
+func Handler(client dynamic.Interface, namespace string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Extract the appID from the path: /proxy/api/{appID}
+		appID := strings.TrimPrefix(r.URL.Path, apiPrefix)
+		// Reject empty appID or nested paths (e.g. /proxy/api/foo/bar).
+		if appID == "" || strings.Contains(appID, "/") {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+
+		state, err := driverState(r.Context(), client, namespace, appID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if state == "" {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "driver not found"})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]string{"appID": appID, "state": state})
+	})
+}
+
+// driverState queries Kubernetes for the driver pod matching appID and returns
+// its state string. Returns ("", nil) when no matching pod exists.
+//
+// State derivation rules (in priority order):
+//  1. If any container status is present, inspect the first container:
+//     - waiting  → waiting.reason (e.g. "ContainerCreating", "CrashLoopBackOff")
+//     - running  → "Running"
+//     - terminated → terminated.reason if non-empty, else terminated.exitCode as
+//     "Error" (non-zero) or "Completed" (zero)
+//  2. Fall back to pod status.phase (e.g. "Pending", "Unknown").
+func driverState(ctx context.Context, client dynamic.Interface, namespace, appID string) (string, error) {
+	labelSel := labelInstance + "=" + instanceValue +
+		"," + labelRole + "=" + roleValue +
+		"," + labelSelector + "=" + appID
+
+	list, err := client.Resource(podGVR).Namespace(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSel,
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(list.Items) == 0 {
+		return "", nil
+	}
+
+	// If multiple pods exist (e.g. a restart), use the most recently created one.
+	pod := mostRecent(list.Items)
+	return stateFromPod(pod), nil
+}
+
+// mostRecent returns the pod with the latest creation timestamp.
+func mostRecent(pods []unstructured.Unstructured) unstructured.Unstructured {
+	best := pods[0]
+	for _, p := range pods[1:] {
+		if p.GetCreationTimestamp().After(best.GetCreationTimestamp().Time) {
+			best = p
+		}
+	}
+	return best
+}
+
+// stateFromPod derives a human-readable state string from a pod object.
+func stateFromPod(pod unstructured.Unstructured) string {
+	containerStatuses, _, _ := unstructured.NestedSlice(pod.Object, "status", "containerStatuses")
+	if len(containerStatuses) > 0 {
+		if cs, ok := containerStatuses[0].(map[string]interface{}); ok {
+			if state := containerStateString(cs); state != "" {
+				return state
+			}
+		}
+	}
+
+	// No container status yet — fall back to pod phase.
+	phase, _, _ := unstructured.NestedString(pod.Object, "status", "phase")
+	if phase != "" {
+		return phase
+	}
+	return "Unknown"
+}
+
+// containerStateString extracts a state string from a containerStatus map.
+func containerStateString(cs map[string]interface{}) string {
+	stateMap, _, _ := unstructured.NestedMap(cs, "state")
+	if stateMap == nil {
+		return ""
+	}
+
+	if waiting, ok := stateMap["waiting"].(map[string]interface{}); ok {
+		if reason, _ := waiting["reason"].(string); reason != "" {
+			return reason
+		}
+		return "Waiting"
+	}
+
+	if _, ok := stateMap["running"]; ok {
+		return "Running"
+	}
+
+	if terminated, ok := stateMap["terminated"].(map[string]interface{}); ok {
+		if reason, _ := terminated["reason"].(string); reason != "" {
+			return reason
+		}
+		exitCode, _, _ := unstructured.NestedFieldNoCopy(terminated, "exitCode")
+		if code, ok := exitCode.(int64); ok && code == 0 {
+			return "Completed"
+		}
+		return "Error"
+	}
+
+	return ""
+}
+
+// writeJSON writes a JSON-encoded body with the given HTTP status code.
+func writeJSON(w http.ResponseWriter, status int, body interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
+}
