@@ -45,9 +45,9 @@ func newStore(drivers ...store.Driver) *store.Store {
 
 func fixedNow() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
-// TestHandlerRootServesPage checks that GET "/" returns 200 and the driver list
-// with links using the /proxy/ prefix.
-func TestHandlerRootServesPage(t *testing.T) {
+// TestHandlerDashboardServesPage checks that GET "/proxy/" returns 200 and the
+// driver list with links using the /proxy/ prefix.
+func TestHandlerDashboardServesPage(t *testing.T) {
 	s := newStore(store.Driver{
 		PodName:     "pod-1",
 		AppSelector: "spark-abc",
@@ -55,7 +55,7 @@ func TestHandlerRootServesPage(t *testing.T) {
 		CreatedAt:   fixedNow().Add(-time.Hour),
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/proxy/", nil)
 	rec := httptest.NewRecorder()
 	Handler(s, fixedNow).ServeHTTP(rec, req)
 
@@ -68,10 +68,10 @@ func TestHandlerRootServesPage(t *testing.T) {
 	}
 }
 
-// TestHandlerNonRootRedirects checks that any path other than "/" gets a
-// 302 redirect to "/".
-func TestHandlerNonRootRedirects(t *testing.T) {
-	paths := []string{"/foo", "/proxy/spark-abc/", "/anything"}
+// TestHandlerNonProxyRedirects checks that any path other than "/proxy/" gets a
+// 302 redirect to "/proxy/".
+func TestHandlerNonProxyRedirects(t *testing.T) {
+	paths := []string{"/", "/foo", "/proxy/spark-abc/", "/anything"}
 	s := newStore()
 
 	for _, path := range paths {
@@ -82,8 +82,8 @@ func TestHandlerNonRootRedirects(t *testing.T) {
 		if rec.Code != http.StatusFound {
 			t.Errorf("path %q: expected 302, got %d", path, rec.Code)
 		}
-		if loc := rec.Header().Get("Location"); loc != "/" {
-			t.Errorf("path %q: expected Location: /, got %q", path, loc)
+		if loc := rec.Header().Get("Location"); loc != "/proxy/" {
+			t.Errorf("path %q: expected Location: /proxy/, got %q", path, loc)
 		}
 	}
 }
