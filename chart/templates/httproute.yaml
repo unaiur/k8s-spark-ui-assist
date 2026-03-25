@@ -15,8 +15,6 @@ spec:
     - {{ include "k8s-spark-ui-assist.httpHostname" . | quote }}
   rules:
     # Catch-all rule for the dashboard UI.
-    # The Go service prepends per-driver /proxy/<selector> rules dynamically;
-    # this rule must remain last so it does not shadow driver routes.
     - matches:
         - path:
             type: PathPrefix
