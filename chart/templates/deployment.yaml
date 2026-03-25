@@ -35,7 +35,6 @@ spec:
           {{- end }}
           command: ["/spark-ui-assist"]
           args:
-            - -http-route.name={{ include "k8s-spark-ui-assist.fullname" . }}
             - -http-route.hostname={{ include "k8s-spark-ui-assist.httpHostname" . }}
             - -http-route.gateway-name={{ include "k8s-spark-ui-assist.httpGatewayName" . }}
             - -http-route.gateway-namespace={{ include "k8s-spark-ui-assist.httpGatewayNamespace" . }}

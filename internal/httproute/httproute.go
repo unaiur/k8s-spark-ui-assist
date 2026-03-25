@@ -1,22 +1,18 @@
-// Package httproute manages per-driver rules inside a shared Gateway API HTTPRoute.
+// Package httproute manages per-driver Gateway API HTTPRoutes.
 //
-// The HTTPRoute itself is created and owned by the Helm chart.  It contains a
-// permanent catch-all rule (path "/") that routes traffic to the dashboard
-// service.  The Manager adds one path-prefix rule per active Spark driver
-// (path "<prefix><appSelector>") and removes it when the driver stops.
-//
-// Because driver rules must be evaluated before the catch-all, they are always
-// inserted before the last rule in the route's rule list.
+// For each active Spark driver the Manager creates a dedicated HTTPRoute named
+// "<appSelector>-ui-route". When the driver stops the route is deleted. The
+// Manager uses the label "app.kubernetes.io/managed-by: spark-ui-assist" so
+// that Reconcile can list all routes it owns and clean up any that belong to
+// drivers that are no longer active.
 //
 // Reconcile() should be called once the pod informer has fully synced so that
-// stale rules left over from a previous instance of the service are cleaned up.
+// stale routes left over from a previous instance of the service are cleaned up.
 package httproute
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"strings"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,250 +30,219 @@ var httpRouteGVR = schema.GroupVersionResource{
 	Resource: "httproutes",
 }
 
-const maxRetries = 5
+// managedByLabel is applied to every HTTPRoute created by this Manager so that
+// Reconcile can list them all with a single API call.
+const managedByLabel = "app.kubernetes.io/managed-by"
+const managedByValue = "spark-ui-assist"
 
 // driverPathPrefix is the fixed URL path prefix for per-driver HTTPRoute rules.
 // Spark UI requires this to be "/proxy/" to resolve its internal asset paths correctly.
 const driverPathPrefix = "/proxy/"
 
-// Manager adds and removes per-driver rules inside the shared HTTPRoute.
+// Manager creates and deletes per-driver HTTPRoutes.
 type Manager struct {
 	client    dynamic.Interface
 	namespace string
 	cfg       config.HTTPRouteConfig
 }
 
-// New creates a new Manager. The shared HTTPRoute must already exist (created
-// by the Helm chart); its name is taken from cfg.RouteName.
+// New creates a new Manager.
 func New(client dynamic.Interface, namespace string, cfg config.HTTPRouteConfig) *Manager {
 	return &Manager{client: client, namespace: namespace, cfg: cfg}
 }
 
-// Ensure adds a routing rule for the given driver to the shared HTTPRoute if
-// one is not already present. The rule is inserted before the catch-all rule.
-// The operation retries on conflict.
+// routeName returns the HTTPRoute name for a given appSelector.
+func routeName(appSelector string) string {
+	return appSelector + "-ui-route"
+}
+
+// Ensure creates the per-driver HTTPRoute if it does not already exist.
+// It is a no-op when the route is already present.
 func (m *Manager) Ensure(ctx context.Context, d store.Driver) {
-	m.updateWithRetry(ctx, "add rule for "+d.AppSelector, func(rules []interface{}) []interface{} {
-		for _, r := range rules {
-			if ruleMatchesDriver(r, d.AppSelector, driverPathPrefix) {
-				return nil // already present, no update needed
-			}
-		}
-		return insertBeforeLast(rules, buildDriverRule(d, driverPathPrefix))
-	})
-}
-
-// Delete removes the routing rule for the given appSelector from the shared
-// HTTPRoute. It is a no-op if no such rule exists. The HTTPRoute itself is
-// never deleted — it is owned by the Helm chart.
-// The operation retries on conflict.
-func (m *Manager) Delete(ctx context.Context, appSelector string) {
-	m.updateWithRetry(ctx, "remove rule for "+appSelector, func(rules []interface{}) []interface{} {
-		filtered := removeDriverRule(rules, appSelector, driverPathPrefix)
-		if len(filtered) == len(rules) {
-			return nil // rule was not present, no update needed
-		}
-		return filtered
-	})
-}
-
-// Reconcile synchronises the driver rules in the shared HTTPRoute against the
-// provided list of currently active drivers. It removes rules for drivers that
-// are no longer active and adds rules for drivers that are missing one.
-// Call this once after the pod informer has fully synced.
-func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) {
-	activeSet := make(map[string]store.Driver, len(active))
-	for _, d := range active {
-		activeSet[d.AppSelector] = d
-	}
-
-	m.updateWithRetry(ctx, "reconcile", func(rules []interface{}) []interface{} {
-		kept := make([]interface{}, 0, len(rules))
-		presentSelectors := make(map[string]bool)
-		changed := false
-
-		for _, r := range rules {
-			sel := driverSelector(r, driverPathPrefix)
-			if sel == "" {
-				kept = append(kept, r) // catch-all or other non-driver rule; always keep
-				continue
-			}
-			if _, ok := activeSet[sel]; ok {
-				kept = append(kept, r)
-				presentSelectors[sel] = true
-			} else {
-				log.Printf("httproute: reconcile: removing stale rule for %s", sel)
-				changed = true
-			}
-		}
-
-		for _, d := range active {
-			if !presentSelectors[d.AppSelector] {
-				log.Printf("httproute: reconcile: adding missing rule for %s", d.AppSelector)
-				kept = insertBeforeLast(kept, buildDriverRule(d, driverPathPrefix))
-				changed = true
-			}
-		}
-
-		if !changed {
-			return nil // already up to date
-		}
-		return kept
-	})
-}
-
-// updateWithRetry fetches the shared HTTPRoute, calls mutate with the current
-// rules, and writes the result back. If mutate returns nil the update is
-// skipped. Conflicts are retried up to maxRetries times.
-// op is a short description used in log messages.
-func (m *Manager) updateWithRetry(ctx context.Context, op string, mutate func([]interface{}) []interface{}) {
 	rc := m.client.Resource(httpRouteGVR).Namespace(m.namespace)
+	name := routeName(d.AppSelector)
 
-	for attempt := range maxRetries {
-		route, err := rc.Get(ctx, m.cfg.RouteName, metav1.GetOptions{})
-		if errors.IsNotFound(err) {
-			return // route doesn't exist; nothing to do
-		}
-		if err != nil {
-			log.Printf("httproute: %s: failed to get HTTPRoute %s: %v", op, m.cfg.RouteName, err)
-			return
-		}
-
-		rules, err := getRules(route)
-		if err != nil {
-			log.Printf("httproute: %s: %v", op, err)
-			return
-		}
-
-		newRules := mutate(rules)
-		if newRules == nil {
-			return // mutator signalled no change needed
-		}
-
-		if err := setRules(route, newRules); err != nil {
-			log.Printf("httproute: %s: %v", op, err)
-			return
-		}
-
-		_, updateErr := rc.Update(ctx, route, metav1.UpdateOptions{})
-		if updateErr == nil {
-			log.Printf("httproute: %s: updated HTTPRoute %s", op, m.cfg.RouteName)
-			return
-		}
-		if errors.IsConflict(updateErr) {
-			log.Printf("httproute: %s: conflict, retrying (attempt %d)", op, attempt+1)
-			continue
-		}
-		log.Printf("httproute: %s: failed to update HTTPRoute %s: %v", op, m.cfg.RouteName, updateErr)
+	_, err := rc.Get(ctx, name, metav1.GetOptions{})
+	if err == nil {
+		return // already exists
+	}
+	if !errors.IsNotFound(err) {
+		log.Printf("httproute: ensure %s: failed to check existence: %v", name, err)
 		return
 	}
 
-	log.Printf("httproute: %s: gave up after %d retries", op, maxRetries)
+	route := buildRoute(d, m.cfg, m.namespace, driverPathPrefix)
+	if _, err := rc.Create(ctx, route, metav1.CreateOptions{}); err != nil {
+		log.Printf("httproute: ensure %s: failed to create: %v", name, err)
+		return
+	}
+	log.Printf("httproute: created HTTPRoute %s", name)
 }
 
-// buildDriverRule returns a single HTTPRoute rule for the given driver.
-// The path value "<prefix><appSelector>" acts as the unique key for the rule.
-func buildDriverRule(d store.Driver, prefix string) interface{} {
-	pathPrefix := prefix + d.AppSelector
-	svcName := d.AppName + "-ui-svc"
+// Delete removes the per-driver HTTPRoute for appSelector.
+// It is a no-op when the route does not exist.
+func (m *Manager) Delete(ctx context.Context, appSelector string) {
+	rc := m.client.Resource(httpRouteGVR).Namespace(m.namespace)
+	name := routeName(appSelector)
 
-	return map[string]interface{}{
-		"matches": []interface{}{
-			map[string]interface{}{
-				"path": map[string]interface{}{
-					"type":  "PathPrefix",
-					"value": pathPrefix,
+	err := rc.Delete(ctx, name, metav1.DeleteOptions{})
+	if errors.IsNotFound(err) {
+		return // already gone
+	}
+	if err != nil {
+		log.Printf("httproute: delete %s: failed: %v", name, err)
+		return
+	}
+	log.Printf("httproute: deleted HTTPRoute %s", name)
+}
+
+// Reconcile synchronises the set of managed HTTPRoutes against the provided
+// list of currently active drivers. It deletes routes for drivers that are no
+// longer active and creates routes for drivers that are missing one.
+// Call this once after the pod informer has fully synced.
+func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) {
+	rc := m.client.Resource(httpRouteGVR).Namespace(m.namespace)
+
+	// Build a set of expected route names.
+	wantedByName := make(map[string]store.Driver, len(active))
+	for _, d := range active {
+		wantedByName[routeName(d.AppSelector)] = d
+	}
+
+	// List all HTTPRoutes owned by this manager.
+	list, err := rc.List(ctx, metav1.ListOptions{
+		LabelSelector: managedByLabel + "=" + managedByValue,
+	})
+	if err != nil {
+		log.Printf("httproute: reconcile: failed to list managed HTTPRoutes: %v", err)
+		return
+	}
+
+	presentNames := make(map[string]bool, len(list.Items))
+	for _, item := range list.Items {
+		name := item.GetName()
+		presentNames[name] = true
+		if _, ok := wantedByName[name]; !ok {
+			log.Printf("httproute: reconcile: deleting stale HTTPRoute %s", name)
+			if delErr := rc.Delete(ctx, name, metav1.DeleteOptions{}); delErr != nil && !errors.IsNotFound(delErr) {
+				log.Printf("httproute: reconcile: failed to delete %s: %v", name, delErr)
+			}
+		}
+	}
+
+	for name, d := range wantedByName {
+		if presentNames[name] {
+			continue
+		}
+		log.Printf("httproute: reconcile: creating missing HTTPRoute %s", name)
+		route := buildRoute(d, m.cfg, m.namespace, driverPathPrefix)
+		if _, createErr := rc.Create(ctx, route, metav1.CreateOptions{}); createErr != nil {
+			log.Printf("httproute: reconcile: failed to create %s: %v", name, createErr)
+		}
+	}
+}
+
+// buildRoute returns a complete HTTPRoute object for the given driver.
+// namespace is the Kubernetes namespace in which the route will be created.
+//
+// The route contains three rules in priority order:
+//  1. Exact match on "<prefix><appSelector>" (no trailing slash) → 302 redirect to
+//     "<prefix><appSelector>/jobs/".
+//  2. Exact match on "<prefix><appSelector>/" (trailing slash) → 302 redirect to
+//     "<prefix><appSelector>/jobs/".
+//  3. PathPrefix match on "<prefix><appSelector>" → URLRewrite (strip prefix) and
+//     forward to the driver service at port 4040.
+//
+// Rules 1 and 2 implement the Spark documentation requirement to redirect bare
+// prefix requests to the jobs page so that relative links resolve correctly.
+// Rule 3 handles all other requests under the prefix.
+func buildRoute(d store.Driver, cfg config.HTTPRouteConfig, namespace string, prefix string) *unstructured.Unstructured {
+	pathPrefix := prefix + d.AppSelector
+	jobsRedirectTarget := pathPrefix + "/jobs/"
+	svcName := d.AppName + "-ui-svc"
+	name := routeName(d.AppSelector)
+
+	// redirectRule builds a rule that issues a 302 redirect to jobsRedirectTarget
+	// for requests that exactly match the given path.
+	redirectRule := func(exactPath string) interface{} {
+		return map[string]interface{}{
+			"matches": []interface{}{
+				map[string]interface{}{
+					"path": map[string]interface{}{
+						"type":  "Exact",
+						"value": exactPath,
+					},
 				},
 			},
-		},
-		"filters": []interface{}{
-			map[string]interface{}{
-				"type": "URLRewrite",
-				"urlRewrite": map[string]interface{}{
-					"path": map[string]interface{}{
-						"type":               "ReplacePrefixMatch",
-						"replacePrefixMatch": "/",
+			"filters": []interface{}{
+				map[string]interface{}{
+					"type": "RequestRedirect",
+					"requestRedirect": map[string]interface{}{
+						"path": map[string]interface{}{
+							"type":            "ReplaceFullPath",
+							"replaceFullPath": jobsRedirectTarget,
+						},
+						"statusCode": int64(302),
+					},
+				},
+			},
+		}
+	}
+
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata": map[string]interface{}{
+				"name":      name,
+				"namespace": namespace,
+				"labels": map[string]interface{}{
+					managedByLabel: managedByValue,
+				},
+			},
+			"spec": map[string]interface{}{
+				"parentRefs": []interface{}{
+					map[string]interface{}{
+						"name":      cfg.GatewayName,
+						"namespace": cfg.GatewayNamespace,
+					},
+				},
+				"hostnames": []interface{}{cfg.Hostname},
+				"rules": []interface{}{
+					// Rule 1: /proxy/<id> (no trailing slash) → redirect to /proxy/<id>/jobs/
+					redirectRule(pathPrefix),
+					// Rule 2: /proxy/<id>/ (trailing slash) → redirect to /proxy/<id>/jobs/
+					redirectRule(pathPrefix + "/"),
+					// Rule 3: /proxy/<id>/... → strip prefix, forward to driver service
+					map[string]interface{}{
+						"matches": []interface{}{
+							map[string]interface{}{
+								"path": map[string]interface{}{
+									"type":  "PathPrefix",
+									"value": pathPrefix,
+								},
+							},
+						},
+						"filters": []interface{}{
+							map[string]interface{}{
+								"type": "URLRewrite",
+								"urlRewrite": map[string]interface{}{
+									"path": map[string]interface{}{
+										"type":               "ReplacePrefixMatch",
+										"replacePrefixMatch": "/",
+									},
+								},
+							},
+						},
+						"backendRefs": []interface{}{
+							map[string]interface{}{
+								"name": svcName,
+								"port": int64(4040),
+							},
+						},
 					},
 				},
 			},
 		},
-		"backendRefs": []interface{}{
-			map[string]interface{}{
-				"name": svcName,
-				"port": int64(4040),
-			},
-		},
 	}
-}
-
-// driverSelector returns the appSelector encoded in the rule's path value
-// ("<prefix><appSelector>"), or "" if the rule is not a driver rule.
-func driverSelector(rule interface{}, prefix string) string {
-	r, ok := rule.(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	matches, _, _ := unstructured.NestedSlice(r, "matches")
-	for _, m := range matches {
-		mMap, ok := m.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		val, _, _ := unstructured.NestedString(mMap, "path", "value")
-		if strings.HasPrefix(val, prefix) && len(val) > len(prefix) {
-			return val[len(prefix):]
-		}
-	}
-	return ""
-}
-
-// ruleMatchesDriver returns true when the rule belongs to appSelector.
-func ruleMatchesDriver(rule interface{}, appSelector string, prefix string) bool {
-	return driverSelector(rule, prefix) == appSelector
-}
-
-// removeDriverRule returns a copy of rules with the rule for appSelector removed.
-func removeDriverRule(rules []interface{}, appSelector string, prefix string) []interface{} {
-	out := make([]interface{}, 0, len(rules))
-	for _, r := range rules {
-		if !ruleMatchesDriver(r, appSelector, prefix) {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
-// insertBeforeLast inserts elem before the last element of rules.
-// If rules is empty the element becomes the only element.
-func insertBeforeLast(rules []interface{}, elem interface{}) []interface{} {
-	if len(rules) == 0 {
-		return []interface{}{elem}
-	}
-	out := make([]interface{}, 0, len(rules)+1)
-	out = append(out, rules[:len(rules)-1]...)
-	out = append(out, elem)
-	out = append(out, rules[len(rules)-1])
-	return out
-}
-
-// getRules extracts the spec.rules slice from an HTTPRoute object.
-// Returns an error if the field is missing or has an unexpected type.
-func getRules(route *unstructured.Unstructured) ([]interface{}, error) {
-	rules, found, err := unstructured.NestedSlice(route.Object, "spec", "rules")
-	if err != nil {
-		return nil, fmt.Errorf("error reading spec.rules from HTTPRoute %s/%s: %w", route.GetNamespace(), route.GetName(), err)
-	}
-	if !found {
-		return nil, fmt.Errorf("spec.rules not found on HTTPRoute %s/%s", route.GetNamespace(), route.GetName())
-	}
-	return rules, nil
-}
-
-// setRules replaces the spec.rules slice on an HTTPRoute object.
-// Returns an error if the field cannot be set.
-func setRules(route *unstructured.Unstructured, rules []interface{}) error {
-	if err := unstructured.SetNestedSlice(route.Object, rules, "spec", "rules"); err != nil {
-		return fmt.Errorf("error writing spec.rules on HTTPRoute %s/%s: %w", route.GetNamespace(), route.GetName(), err)
-	}
-	return nil
 }

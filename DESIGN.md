@@ -37,7 +37,7 @@ internal/
   config/              flag parsing and validation
   store/               thread-safe in-memory driver map
   watcher/             Kubernetes informer for Spark driver pods
-  httproute/           Gateway API HTTPRoute rule management (shared route)
+  httproute/           Gateway API HTTPRoute lifecycle management (per-driver routes)
   server/              HTTP handler and duration formatting
 ```
 
@@ -115,52 +115,48 @@ and shut down cleanly on `SIGTERM`/`SIGINT`.
 
 ### `internal/httproute`
 
-Uses the **dynamic client** (`dynamic.Interface`), building HTTPRoute rule entries as
+Uses the **dynamic client** (`dynamic.Interface`), building HTTPRoute objects as
 plain `map[string]interface{}` values against the GVR
 `gateway.networking.k8s.io/v1/httproutes`. This avoids importing
 `sigs.k8s.io/gateway-api` and its type registrations entirely.
 
 #### Ownership model
 
-The **Helm chart** creates and owns the single shared `HTTPRoute` (named after the Helm
-release). It contains a permanent catch-all rule that routes all traffic to the dashboard
-service. The Go service **never creates or deletes the HTTPRoute**; it only patches
-`spec.rules`.
-
-#### Rule ordering invariant
-
-Driver rules (`PathPrefix /live/<appSelector>`) must be evaluated before the catch-all
-(`PathPrefix /`). `insertBeforeLast` always inserts new driver rules immediately before
-the last element, keeping the catch-all rule at the end regardless of how many drivers
-are active.
+The **Helm chart** creates and owns one HTTPRoute for the dashboard (named after the Helm
+release). The Go service creates a **separate HTTPRoute per active Spark driver**, named
+`<appSelector>-ui-route`. Each driver route contains exactly one rule:
+`PathPrefix /proxy/<appSelector>` → port 4040 with a `ReplacePrefixMatch: /` URL rewrite.
+All driver-managed routes carry the label `app.kubernetes.io/managed-by: spark-ui-assist`
+so that Reconcile can list them with a single label-selector query.
 
 #### `Manager` methods
 
 | Method | Effect |
 |---|---|
-| `Ensure(ctx, driver)` | Adds a `/live/<appSelector>` rule for the driver if not already present. |
-| `Delete(ctx, appSelector)` | Removes the rule for `appSelector`. Never deletes the route itself. |
-| `Reconcile(ctx, active)` | Called once on startup after informer sync. Removes stale rules, adds missing ones. |
+| `Ensure(ctx, driver)` | Creates the HTTPRoute `<appSelector>-ui-route` if it does not already exist. |
+| `Delete(ctx, appSelector)` | Deletes the HTTPRoute for `appSelector`. No-op if it does not exist. |
+| `Reconcile(ctx, active)` | Called once on startup after informer sync. Lists all managed HTTPRoutes, deletes stale ones, creates missing ones. |
 
-Both `Ensure` and `Delete` are idempotent. All three methods call the shared
-`updateWithRetry` helper internally.
+Both `Ensure` and `Delete` are idempotent.
 
-#### `updateWithRetry`
+#### Rule structure
 
-Executes a get → mutate → update loop with up to 5 conflict retries:
+Every driver HTTPRoute contains exactly **3 rules**, in this order:
 
-1. `Get` the shared HTTPRoute.
-2. Extract `spec.rules` via `getRules`.
-3. Call the `mutate(rules) []interface{}` closure.  
-   If `mutate` returns `nil`, the update is skipped (no-op signal).
-4. Write the new rules back with `setRules`.
-5. `Update` the route; retry on `Conflict`.
+| # | Match | Action |
+|---|---|---|
+| 1 | `Exact /proxy/<appSelector>` | 302 redirect → `/proxy/<appSelector>/jobs/` |
+| 2 | `Exact /proxy/<appSelector>/` | 302 redirect → `/proxy/<appSelector>/jobs/` |
+| 3 | `PathPrefix /proxy/<appSelector>` | URLRewrite (`ReplacePrefixMatch: /`) + forward to `<appName>-ui-svc:4040` |
 
-#### Path encoding
+Rules 1 and 2 handle the case where a user navigates to the bare app URL without a
+trailing slash or path, redirecting them directly to the Spark jobs page. Rule 3 forwards
+all other requests to the Spark UI after stripping the `/proxy/<appSelector>` prefix.
 
-A driver rule is identified by its path value `/live/<appSelector>`. `driverSelector`
-extracts the selector from a rule by inspecting `matches[*].path.value`; it returns `""`
-for non-driver rules (e.g. the catch-all `/`).
+The redirect filter uses `type: RequestRedirect` with `requestRedirect.path.type:
+ReplaceFullPath` and `statusCode: 302` (Gateway API Extended support feature
+`HTTPRoutePathRedirect`). Response-header rewriting of upstream `Location:` headers is
+not implementable in standard Gateway API and is intentionally omitted.
 
 ### `internal/server`
 

@@ -2,7 +2,6 @@ package httproute_test
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -23,12 +22,7 @@ var httpRouteGVR = schema.GroupVersionResource{
 	Resource: "httproutes",
 }
 
-const (
-	routeName   = "my-release-spark-ui-assist"
-	dashSvcName = "my-release-spark-ui-assist"
-	namespace   = "default"
-	proxyPrefix = "/proxy/"
-)
+const namespace = "default"
 
 // newScheme returns a minimal scheme that knows about HTTPRoute and HTTPRouteList.
 func newScheme() *runtime.Scheme {
@@ -53,7 +47,6 @@ func newDriver(appSelector, appName string) store.Driver {
 // newManager creates a Manager wired to the fake client.
 func newManager(client *dynamicfake.FakeDynamicClient) *httproute.Manager {
 	cfg := config.HTTPRouteConfig{
-		RouteName:        routeName,
 		Hostname:         "spark.example.com",
 		GatewayName:      "main-gateway",
 		GatewayNamespace: "gateway-ns",
@@ -61,145 +54,153 @@ func newManager(client *dynamicfake.FakeDynamicClient) *httproute.Manager {
 	return httproute.New(client, namespace, cfg)
 }
 
-// catchAllRule mimics the static dashboard rule created by the Helm chart.
-func catchAllRule() interface{} {
-	return map[string]interface{}{
-		"matches": []interface{}{
-			map[string]interface{}{
-				"path": map[string]interface{}{
-					"type":  "PathPrefix",
-					"value": "/",
-				},
-			},
-		},
-		"backendRefs": []interface{}{
-			map[string]interface{}{
-				"name": dashSvcName,
-				"port": int64(80),
-			},
-		},
+// routeExists checks whether an HTTPRoute with the given name exists.
+func routeExists(t *testing.T, client *dynamicfake.FakeDynamicClient, name string) bool {
+	t.Helper()
+	_, err := client.Resource(httpRouteGVR).Namespace(namespace).Get(
+		context.Background(), name, metav1.GetOptions{},
+	)
+	if err == nil {
+		return true
 	}
+	return false
 }
 
-// preCreateRoute simulates the Helm chart by creating the shared HTTPRoute with
-// just the catch-all dashboard rule already present.
-func preCreateRoute(t *testing.T, client *dynamicfake.FakeDynamicClient) {
+// listRoutes returns all HTTPRoutes in the namespace.
+func listRoutes(t *testing.T, client *dynamicfake.FakeDynamicClient) []unstructured.Unstructured {
 	t.Helper()
-	route := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "gateway.networking.k8s.io/v1",
-			"kind":       "HTTPRoute",
-			"metadata": map[string]interface{}{
-				"name":      routeName,
-				"namespace": namespace,
-			},
-			"spec": map[string]interface{}{
-				"rules": []interface{}{catchAllRule()},
-			},
-		},
-	}
-	_, err := client.Resource(httpRouteGVR).Namespace(namespace).Create(
-		context.Background(), route, metav1.CreateOptions{},
+	list, err := client.Resource(httpRouteGVR).Namespace(namespace).List(
+		context.Background(), metav1.ListOptions{},
 	)
 	if err != nil {
-		t.Fatalf("preCreateRoute: %v", err)
+		t.Fatalf("listRoutes: %v", err)
 	}
+	return list.Items
 }
 
-// getRules retrieves spec.rules from the shared HTTPRoute.
-func getRules(t *testing.T, client *dynamicfake.FakeDynamicClient) []interface{} {
+// getPathValue returns the path value from the first rule of an HTTPRoute.
+func getPathValue(t *testing.T, route unstructured.Unstructured) string {
 	t.Helper()
-	route, err := client.Resource(httpRouteGVR).Namespace(namespace).Get(
-		context.Background(), routeName, metav1.GetOptions{},
-	)
-	if err != nil {
-		t.Fatalf("getRules: could not get HTTPRoute: %v", err)
+	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+	if len(rules) == 0 {
+		t.Fatal("getPathValue: no rules found")
 	}
-	rules, found, err := unstructured.NestedSlice(route.Object, "spec", "rules")
-	if err != nil {
-		t.Fatalf("getRules: spec.rules has unexpected type: %v", err)
+	rule := rules[0].(map[string]interface{})
+	matches, _, _ := unstructured.NestedSlice(rule, "matches")
+	if len(matches) == 0 {
+		t.Fatal("getPathValue: no matches found")
 	}
-	if !found {
-		t.Fatalf("getRules: spec.rules not found on HTTPRoute")
-	}
-	return rules
+	val, _, _ := unstructured.NestedString(matches[0].(map[string]interface{}), "path", "value")
+	return val
 }
 
-// driverRules returns only the driver (non-catch-all) rules.
-func driverRules(rules []interface{}) []interface{} {
-	var out []interface{}
-	for _, r := range rules {
-		rm, ok := r.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		matches, _, _ := unstructured.NestedSlice(rm, "matches")
-		for _, m := range matches {
-			mMap, ok := m.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			val, _, _ := unstructured.NestedString(mMap, "path", "value")
-			if strings.HasPrefix(val, proxyPrefix) && len(val) > len(proxyPrefix) {
-				out = append(out, r)
-			}
-		}
-	}
-	return out
-}
-
-// TestEnsureAddsDriverRule verifies that Ensure adds exactly one driver rule
-// before the catch-all rule.
-func TestEnsureAddsDriverRule(t *testing.T) {
+// TestEnsureCreatesRoute verifies that Ensure creates an HTTPRoute for a driver.
+func TestEnsureCreatesRoute(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
-	preCreateRoute(t, client)
 	mgr := newManager(client)
 	ctx := context.Background()
 
 	mgr.Ensure(ctx, newDriver("spark-abc123", "my-spark-job"))
 
-	rules := getRules(t, client)
-	if len(rules) != 2 {
-		t.Fatalf("expected 2 rules (1 driver + catch-all), got %d", len(rules))
-	}
-	// Driver rule must come before the catch-all.
-	first := rules[0].(map[string]interface{})
-	matches, _, _ := unstructured.NestedSlice(first, "matches")
-	pathVal, _, _ := unstructured.NestedString(matches[0].(map[string]interface{}), "path", "value")
-	if pathVal != "/proxy/spark-abc123" {
-		t.Errorf("expected driver rule first, got path %q", pathVal)
+	if !routeExists(t, client, "spark-abc123-ui-route") {
+		t.Fatal("expected HTTPRoute spark-abc123-ui-route to exist")
 	}
 }
 
-// TestEnsureAddsRuleForSecondDriver verifies two drivers produce two driver
-// rules, still with the catch-all last.
-func TestEnsureAddsRuleForSecondDriver(t *testing.T) {
+// TestEnsureRouteHasCorrectPath verifies that the created HTTPRoute has a rule
+// matching the expected /proxy/<appSelector> path.
+func TestEnsureRouteHasCorrectPath(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
-	preCreateRoute(t, client)
 	mgr := newManager(client)
 	ctx := context.Background()
 
-	mgr.Ensure(ctx, newDriver("spark-aaa", "job-a"))
-	mgr.Ensure(ctx, newDriver("spark-bbb", "job-b"))
+	mgr.Ensure(ctx, newDriver("spark-abc123", "my-spark-job"))
 
-	rules := getRules(t, client)
-	if len(rules) != 3 {
-		t.Fatalf("expected 3 rules (2 drivers + catch-all), got %d", len(rules))
+	routes := listRoutes(t, client)
+	if len(routes) != 1 {
+		t.Fatalf("expected 1 HTTPRoute, got %d", len(routes))
 	}
-	// Last rule must still be catch-all.
-	last := rules[len(rules)-1].(map[string]interface{})
-	matches, _, _ := unstructured.NestedSlice(last, "matches")
-	pathVal, _, _ := unstructured.NestedString(matches[0].(map[string]interface{}), "path", "value")
-	if pathVal != "/" {
-		t.Errorf("expected catch-all rule last, got path %q", pathVal)
+	pathVal := getPathValue(t, routes[0])
+	if pathVal != "/proxy/spark-abc123" {
+		t.Errorf("expected path /proxy/spark-abc123, got %q", pathVal)
+	}
+}
+
+// TestEnsureRouteHasRedirectRules verifies that the created HTTPRoute has
+// exactly the three expected rules in the correct order:
+//  1. Exact /proxy/<id>         → 302 redirect to /proxy/<id>/jobs/
+//  2. Exact /proxy/<id>/        → 302 redirect to /proxy/<id>/jobs/
+//  3. PathPrefix /proxy/<id>    → URLRewrite forward to driver service
+func TestEnsureRouteHasRedirectRules(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	mgr := newManager(client)
+	ctx := context.Background()
+
+	mgr.Ensure(ctx, newDriver("spark-abc123", "my-spark-job"))
+
+	routes := listRoutes(t, client)
+	if len(routes) != 1 {
+		t.Fatalf("expected 1 HTTPRoute, got %d", len(routes))
+	}
+	route := routes[0]
+	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+	if len(rules) != 3 {
+		t.Fatalf("expected 3 rules, got %d", len(rules))
+	}
+
+	// Helper: extract path type and value from rule at index i.
+	rulePathTypeValue := func(i int) (string, string) {
+		t.Helper()
+		rule := rules[i].(map[string]interface{})
+		matches, _, _ := unstructured.NestedSlice(rule, "matches")
+		m := matches[0].(map[string]interface{})
+		typ, _, _ := unstructured.NestedString(m, "path", "type")
+		val, _, _ := unstructured.NestedString(m, "path", "value")
+		return typ, val
+	}
+	// Helper: extract redirect target from rule at index i.
+	ruleRedirectTarget := func(i int) string {
+		t.Helper()
+		rule := rules[i].(map[string]interface{})
+		filters, _, _ := unstructured.NestedSlice(rule, "filters")
+		f := filters[0].(map[string]interface{})
+		target, _, _ := unstructured.NestedString(f, "requestRedirect", "path", "replaceFullPath")
+		return target
+	}
+
+	// Rule 0: Exact /proxy/spark-abc123 → redirect to /proxy/spark-abc123/jobs/
+	typ0, val0 := rulePathTypeValue(0)
+	if typ0 != "Exact" || val0 != "/proxy/spark-abc123" {
+		t.Errorf("rule 0: expected Exact /proxy/spark-abc123, got %s %s", typ0, val0)
+	}
+	if target := ruleRedirectTarget(0); target != "/proxy/spark-abc123/jobs/" {
+		t.Errorf("rule 0: expected redirect to /proxy/spark-abc123/jobs/, got %q", target)
+	}
+
+	// Rule 1: Exact /proxy/spark-abc123/ → redirect to /proxy/spark-abc123/jobs/
+	typ1, val1 := rulePathTypeValue(1)
+	if typ1 != "Exact" || val1 != "/proxy/spark-abc123/" {
+		t.Errorf("rule 1: expected Exact /proxy/spark-abc123/, got %s %s", typ1, val1)
+	}
+	if target := ruleRedirectTarget(1); target != "/proxy/spark-abc123/jobs/" {
+		t.Errorf("rule 1: expected redirect to /proxy/spark-abc123/jobs/, got %q", target)
+	}
+
+	// Rule 2: PathPrefix /proxy/spark-abc123 → forward (no redirect filter)
+	typ2, val2 := rulePathTypeValue(2)
+	if typ2 != "PathPrefix" || val2 != "/proxy/spark-abc123" {
+		t.Errorf("rule 2: expected PathPrefix /proxy/spark-abc123, got %s %s", typ2, val2)
+	}
+	rule2 := rules[2].(map[string]interface{})
+	if _, ok := rule2["backendRefs"]; !ok {
+		t.Error("rule 2: expected backendRefs to be present")
 	}
 }
 
 // TestEnsureIdempotent verifies that calling Ensure twice for the same driver
-// does not duplicate the rule.
+// does not create a duplicate route.
 func TestEnsureIdempotent(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
-	preCreateRoute(t, client)
 	mgr := newManager(client)
 	ctx := context.Background()
 	d := newDriver("spark-abc123", "my-spark-job")
@@ -207,17 +208,36 @@ func TestEnsureIdempotent(t *testing.T) {
 	mgr.Ensure(ctx, d)
 	mgr.Ensure(ctx, d)
 
-	rules := getRules(t, client)
-	if len(rules) != 2 {
-		t.Errorf("expected 2 rules after idempotent Ensure, got %d", len(rules))
+	routes := listRoutes(t, client)
+	if len(routes) != 1 {
+		t.Errorf("expected 1 HTTPRoute after idempotent Ensure, got %d", len(routes))
 	}
 }
 
-// TestDeleteRemovesDriverRule verifies that Delete removes the driver rule but
-// leaves the catch-all rule intact.
-func TestDeleteRemovesDriverRule(t *testing.T) {
+// TestEnsureMultipleDrivers verifies that two drivers produce two separate HTTPRoutes.
+func TestEnsureMultipleDrivers(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
-	preCreateRoute(t, client)
+	mgr := newManager(client)
+	ctx := context.Background()
+
+	mgr.Ensure(ctx, newDriver("spark-aaa", "job-a"))
+	mgr.Ensure(ctx, newDriver("spark-bbb", "job-b"))
+
+	routes := listRoutes(t, client)
+	if len(routes) != 2 {
+		t.Fatalf("expected 2 HTTPRoutes, got %d", len(routes))
+	}
+	if !routeExists(t, client, "spark-aaa-ui-route") {
+		t.Error("expected HTTPRoute spark-aaa-ui-route to exist")
+	}
+	if !routeExists(t, client, "spark-bbb-ui-route") {
+		t.Error("expected HTTPRoute spark-bbb-ui-route to exist")
+	}
+}
+
+// TestDeleteRoute verifies that Delete removes the driver's HTTPRoute.
+func TestDeleteRoute(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
 	mgr := newManager(client)
 	ctx := context.Background()
 
@@ -225,71 +245,39 @@ func TestDeleteRemovesDriverRule(t *testing.T) {
 	mgr.Ensure(ctx, newDriver("spark-bbb", "job-b"))
 	mgr.Delete(ctx, "spark-aaa")
 
-	rules := getRules(t, client)
-	if len(rules) != 2 {
-		t.Fatalf("expected 2 rules (1 driver + catch-all) after delete, got %d", len(rules))
+	routes := listRoutes(t, client)
+	if len(routes) != 1 {
+		t.Fatalf("expected 1 HTTPRoute after delete, got %d", len(routes))
 	}
-	dr := driverRules(rules)
-	if len(dr) != 1 {
-		t.Fatalf("expected 1 driver rule remaining, got %d", len(dr))
-	}
-	rm := dr[0].(map[string]interface{})
-	matches, _, _ := unstructured.NestedSlice(rm, "matches")
-	pathVal, _, _ := unstructured.NestedString(matches[0].(map[string]interface{}), "path", "value")
-	if pathVal != "/proxy/spark-bbb" {
-		t.Errorf("expected surviving rule for spark-bbb, got %q", pathVal)
+	if routes[0].GetName() != "spark-bbb-ui-route" {
+		t.Errorf("expected spark-bbb-ui-route to survive, got %q", routes[0].GetName())
 	}
 }
 
-// TestDeleteLastDriverRuleKeepsCatchAll verifies that removing the last driver
-// does NOT delete the HTTPRoute — the catch-all rule must survive.
-func TestDeleteLastDriverRuleKeepsCatchAll(t *testing.T) {
-	client := dynamicfake.NewSimpleDynamicClient(newScheme())
-	preCreateRoute(t, client)
-	mgr := newManager(client)
-	ctx := context.Background()
-
-	mgr.Ensure(ctx, newDriver("spark-abc123", "my-spark-job"))
-	mgr.Delete(ctx, "spark-abc123")
-
-	rules := getRules(t, client) // will fail if route was deleted
-	if len(rules) != 1 {
-		t.Fatalf("expected only the catch-all rule remaining, got %d rules", len(rules))
-	}
-	rm := rules[0].(map[string]interface{})
-	matches, _, _ := unstructured.NestedSlice(rm, "matches")
-	pathVal, _, _ := unstructured.NestedString(matches[0].(map[string]interface{}), "path", "value")
-	if pathVal != "/" {
-		t.Errorf("expected catch-all rule, got path %q", pathVal)
-	}
-}
-
-// TestDeleteNonExistentRuleIsNoop verifies that deleting a rule that is not
+// TestDeleteNonExistentRouteIsNoop verifies that deleting a route that is not
 // present is safe.
-func TestDeleteNonExistentRuleIsNoop(t *testing.T) {
+func TestDeleteNonExistentRouteIsNoop(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
-	preCreateRoute(t, client)
 	mgr := newManager(client)
 	ctx := context.Background()
 
 	mgr.Ensure(ctx, newDriver("spark-aaa", "job-a"))
-	mgr.Delete(ctx, "spark-unknown")
+	mgr.Delete(ctx, "spark-unknown") // should not panic or error
 
-	rules := getRules(t, client)
-	if len(rules) != 2 {
-		t.Errorf("expected 2 rules unchanged, got %d", len(rules))
+	routes := listRoutes(t, client)
+	if len(routes) != 1 {
+		t.Errorf("expected 1 HTTPRoute unchanged, got %d", len(routes))
 	}
 }
 
-// TestReconcileRemovesStaleRules verifies that Reconcile removes driver rules
+// TestReconcileRemovesStaleRoutes verifies that Reconcile deletes HTTPRoutes
 // whose drivers are no longer active.
-func TestReconcileRemovesStaleRules(t *testing.T) {
+func TestReconcileRemovesStaleRoutes(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
-	preCreateRoute(t, client)
 	mgr := newManager(client)
 	ctx := context.Background()
 
-	// Simulate two rules left over from a previous instance.
+	// Simulate two routes left over from a previous instance.
 	mgr.Ensure(ctx, newDriver("spark-old1", "job-old1"))
 	mgr.Ensure(ctx, newDriver("spark-old2", "job-old2"))
 
@@ -297,28 +285,23 @@ func TestReconcileRemovesStaleRules(t *testing.T) {
 	active := []store.Driver{newDriver("spark-old2", "job-old2")}
 	mgr.Reconcile(ctx, active)
 
-	rules := getRules(t, client)
-	dr := driverRules(rules)
-	if len(dr) != 1 {
-		t.Fatalf("expected 1 driver rule after reconcile, got %d", len(dr))
+	routes := listRoutes(t, client)
+	if len(routes) != 1 {
+		t.Fatalf("expected 1 HTTPRoute after reconcile, got %d", len(routes))
 	}
-	rm := dr[0].(map[string]interface{})
-	matches, _, _ := unstructured.NestedSlice(rm, "matches")
-	pathVal, _, _ := unstructured.NestedString(matches[0].(map[string]interface{}), "path", "value")
-	if pathVal != "/proxy/spark-old2" {
-		t.Errorf("expected rule for spark-old2 to survive, got %q", pathVal)
+	if routes[0].GetName() != "spark-old2-ui-route" {
+		t.Errorf("expected spark-old2-ui-route to survive, got %q", routes[0].GetName())
 	}
 }
 
-// TestReconcileAddsMissingRules verifies that Reconcile adds rules for active
-// drivers that don't yet have a rule.
-func TestReconcileAddsMissingRules(t *testing.T) {
+// TestReconcileCreatesMissingRoutes verifies that Reconcile creates HTTPRoutes
+// for active drivers that don't yet have a route.
+func TestReconcileCreatesMissingRoutes(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
-	preCreateRoute(t, client)
 	mgr := newManager(client)
 	ctx := context.Background()
 
-	// spark-aaa already has a rule; spark-bbb does not.
+	// spark-aaa already has a route; spark-bbb does not.
 	mgr.Ensure(ctx, newDriver("spark-aaa", "job-a"))
 
 	active := []store.Driver{
@@ -327,34 +310,30 @@ func TestReconcileAddsMissingRules(t *testing.T) {
 	}
 	mgr.Reconcile(ctx, active)
 
-	rules := getRules(t, client)
-	dr := driverRules(rules)
-	if len(dr) != 2 {
-		t.Fatalf("expected 2 driver rules after reconcile, got %d", len(dr))
+	if !routeExists(t, client, "spark-aaa-ui-route") {
+		t.Error("expected spark-aaa-ui-route to still exist")
+	}
+	if !routeExists(t, client, "spark-bbb-ui-route") {
+		t.Error("expected spark-bbb-ui-route to be created by Reconcile")
 	}
 }
 
-// TestReconcileNoopWhenUpToDate verifies that Reconcile does not update the
-// route when nothing needs changing.
+// TestReconcileNoopWhenUpToDate verifies that Reconcile does not perform
+// create or delete calls when nothing needs changing.
 func TestReconcileNoopWhenUpToDate(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
-	preCreateRoute(t, client)
 	mgr := newManager(client)
 	ctx := context.Background()
 
 	d := newDriver("spark-aaa", "job-a")
 	mgr.Ensure(ctx, d)
 
-	// Count update calls before reconcile.
 	actionsBefore := len(client.Actions())
 	mgr.Reconcile(ctx, []store.Driver{d})
 
-	actionsAfter := len(client.Actions())
-	// Reconcile should have issued a Get but no Update.
 	for _, a := range client.Actions()[actionsBefore:] {
-		if a.GetVerb() == "update" {
-			t.Errorf("unexpected update action during no-op reconcile: %v", a)
+		if a.GetVerb() == "create" || a.GetVerb() == "delete" {
+			t.Errorf("unexpected %s action during no-op reconcile", a.GetVerb())
 		}
 	}
-	_ = actionsAfter
 }
