@@ -24,10 +24,10 @@ var httpRouteGVR = schema.GroupVersionResource{
 }
 
 const (
-	routeName    = "my-release-spark-ui-assist"
-	dashSvcName  = "my-release-spark-ui-assist"
-	namespace    = "default"
-	driverPrefix = "/proxy/"
+	routeName   = "my-release-spark-ui-assist"
+	dashSvcName = "my-release-spark-ui-assist"
+	namespace   = "default"
+	proxyPrefix = "/proxy/"
 )
 
 // newScheme returns a minimal scheme that knows about HTTPRoute and HTTPRouteList.
@@ -57,7 +57,6 @@ func newManager(client *dynamicfake.FakeDynamicClient) *httproute.Manager {
 		Hostname:         "spark.example.com",
 		GatewayName:      "main-gateway",
 		GatewayNamespace: "gateway-ns",
-		DriverPathPrefix: driverPrefix,
 	}
 	return httproute.New(client, namespace, cfg)
 }
@@ -141,7 +140,7 @@ func driverRules(rules []interface{}) []interface{} {
 				continue
 			}
 			val, _, _ := unstructured.NestedString(mMap, "path", "value")
-			if strings.HasPrefix(val, driverPrefix) && len(val) > len(driverPrefix) {
+			if strings.HasPrefix(val, proxyPrefix) && len(val) > len(proxyPrefix) {
 				out = append(out, r)
 			}
 		}

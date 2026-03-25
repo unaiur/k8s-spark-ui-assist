@@ -24,6 +24,38 @@ them hard to bookmark or share.
 - Kubernetes cluster with RBAC permissions to `list` and `watch` pods in the service namespace.
 - [Gateway API](https://gateway-api.sigs.k8s.io/) CRDs installed and a running gateway.
 
+### Spark job configuration
+
+Each Spark job must enable reverse-proxy mode so that the UI correctly rewrites its
+internal asset paths when served behind a path prefix:
+
+- Via `spark-submit`:
+
+  ```bash
+  spark-submit \
+    --conf spark.ui.reverseProxy=true \
+    ...
+  ```
+
+- Via `spark-defaults.conf`:
+
+  ```properties
+  spark.ui.reverseProxy true
+  ```
+
+- Via [Kubernetes Spark Operator](https://github.com/kubeflow/spark-operator) `SparkApplication` spec:
+
+  ```yaml
+  spec:
+    sparkConf:
+      "spark.ui.reverseProxy": "true"
+  ```
+
+Without this setting the Spark UI will load but its static assets (JS, CSS) will return
+404 errors because they are requested at the wrong path.
+
+### Pod labels
+
 Spark driver pods must carry these two labels for the service to recognise them:
 
 | Label | Value |
@@ -117,8 +149,8 @@ Running Spark Jobs
 • nightly-ml   (running for 2 days 08:00:00)
 ```
 
-Each entry is a link to `/live/<spark-app-selector>/`, which your gateway or ingress should
-proxy to the driver pod's port 4040.
+Each entry is a link to `/proxy/<spark-app-selector>/jobs/`, which your gateway routes
+to the driver pod's port 4040.
 
 Durations omit the days component when less than 24 hours have elapsed
 (`23:59:59` → `1 day 00:00:00`).

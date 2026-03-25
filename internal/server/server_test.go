@@ -46,7 +46,7 @@ func newStore(drivers ...store.Driver) *store.Store {
 func fixedNow() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 // TestHandlerRootServesPage checks that GET "/" returns 200 and the driver list
-// with links using the configured prefix.
+// with links using the /proxy/ prefix.
 func TestHandlerRootServesPage(t *testing.T) {
 	s := newStore(store.Driver{
 		PodName:     "pod-1",
@@ -57,7 +57,7 @@ func TestHandlerRootServesPage(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-	Handler(s, fixedNow, "/proxy/").ServeHTTP(rec, req)
+	Handler(s, fixedNow).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK, got %d", rec.Code)
@@ -65,28 +65,6 @@ func TestHandlerRootServesPage(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "/proxy/spark-abc/jobs/") {
 		t.Errorf("expected driver link with /proxy/ prefix in body, got:\n%s", body)
-	}
-}
-
-// TestHandlerCustomPrefix checks that a non-default prefix is used in the links.
-func TestHandlerCustomPrefix(t *testing.T) {
-	s := newStore(store.Driver{
-		PodName:     "pod-1",
-		AppSelector: "spark-abc",
-		AppName:     "my-job",
-		CreatedAt:   fixedNow().Add(-time.Hour),
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rec := httptest.NewRecorder()
-	Handler(s, fixedNow, "/live/").ServeHTTP(rec, req)
-
-	body := rec.Body.String()
-	if !strings.Contains(body, "/live/spark-abc/jobs/") {
-		t.Errorf("expected driver link with /live/ prefix in body, got:\n%s", body)
-	}
-	if strings.Contains(body, "/proxy/") {
-		t.Errorf("unexpected /proxy/ prefix in body when /live/ was configured")
 	}
 }
 
@@ -99,7 +77,7 @@ func TestHandlerNonRootRedirects(t *testing.T) {
 	for _, path := range paths {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
-		Handler(s, fixedNow, "/proxy/").ServeHTTP(rec, req)
+		Handler(s, fixedNow).ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusFound {
 			t.Errorf("path %q: expected 302, got %d", path, rec.Code)
