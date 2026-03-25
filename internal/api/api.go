@@ -83,7 +83,9 @@ func Handler(client dynamic.Interface, namespace string) http.Handler {
 //     - running  → "Running"
 //     - terminated → terminated.reason if non-empty, else terminated.exitCode as
 //     "Error" (non-zero) or "Completed" (zero)
-//  2. Fall back to pod status.phase (e.g. "Pending", "Unknown").
+//  2. No container status yet (pod not yet started): inspect pod conditions for a
+//     False PodScheduled condition and return its reason (e.g. "Unschedulable");
+//     otherwise return "Pending".
 func driverState(ctx context.Context, client dynamic.Interface, namespace, appID string) (string, error) {
 	labelSel := labelInstance + "=" + instanceValue +
 		"," + labelRole + "=" + roleValue +
@@ -126,12 +128,32 @@ func stateFromPod(pod unstructured.Unstructured) string {
 		}
 	}
 
-	// No container status yet — fall back to pod phase.
-	phase, _, _ := unstructured.NestedString(pod.Object, "status", "phase")
-	if phase != "" {
-		return phase
+	// No container status yet — pod has not started.  Check conditions for a
+	// more specific reason (e.g. scheduling failure) before falling back to
+	// "Pending".
+	return pendingReason(pod)
+}
+
+// pendingReason returns a waiting-style reason for a pod that has no container
+// statuses yet.  It looks for a PodScheduled condition with status "False" and
+// returns its Reason field (e.g. "Unschedulable"); otherwise it returns
+// "Pending".
+func pendingReason(pod unstructured.Unstructured) string {
+	conditions, _, _ := unstructured.NestedSlice(pod.Object, "status", "conditions")
+	for _, raw := range conditions {
+		cond, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		condType, _ := cond["type"].(string)
+		condStatus, _ := cond["status"].(string)
+		if condType == "PodScheduled" && condStatus == "False" {
+			if reason, _ := cond["reason"].(string); reason != "" {
+				return reason
+			}
+		}
 	}
-	return "Unknown"
+	return "Pending"
 }
 
 // containerStateString extracts a state string from a containerStatus map.
