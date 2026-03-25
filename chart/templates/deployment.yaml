@@ -39,7 +39,6 @@ spec:
             - -http-route.hostname={{ include "k8s-spark-ui-assist.httpHostname" . }}
             - -http-route.gateway-name={{ include "k8s-spark-ui-assist.httpGatewayName" . }}
             - -http-route.gateway-namespace={{ include "k8s-spark-ui-assist.httpGatewayNamespace" . }}
-            - -http-route.driver-path-prefix={{ .Values.httpDriverPathPrefix }}
           ports:
             - name: http
               containerPort: 8080

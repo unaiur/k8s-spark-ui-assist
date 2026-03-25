@@ -25,6 +25,10 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
 </html>
 `))
 
+// driverPathPrefix is the fixed URL path prefix for per-driver links.
+// Spark UI requires this exact value to resolve its internal asset paths correctly.
+const driverPathPrefix = "/proxy/"
+
 type driverView struct {
 	URL      string
 	AppName  string
@@ -35,9 +39,9 @@ type driverView struct {
 // Requests whose URL path is not exactly "/" are redirected to "/" so that
 // relative links in the page resolve correctly regardless of how the gateway
 // routes traffic to this handler.
-// driverPathPrefix is the URL path prefix for per-driver links (e.g. "/proxy/");
-// it must start with "/" and end with "/" (the config.Validate method ensures this).
-func Handler(s *store.Store, now func() time.Time, driverPathPrefix string) http.Handler {
+// Per-driver links use the fixed "/proxy/" prefix required by Spark UI to
+// resolve its internal asset paths correctly.
+func Handler(s *store.Store, now func() time.Time) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.Redirect(w, r, "/", http.StatusFound)

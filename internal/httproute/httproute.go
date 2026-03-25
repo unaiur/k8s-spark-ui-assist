@@ -36,6 +36,10 @@ var httpRouteGVR = schema.GroupVersionResource{
 
 const maxRetries = 5
 
+// driverPathPrefix is the fixed URL path prefix for per-driver HTTPRoute rules.
+// Spark UI requires this to be "/proxy/" to resolve its internal asset paths correctly.
+const driverPathPrefix = "/proxy/"
+
 // Manager adds and removes per-driver rules inside the shared HTTPRoute.
 type Manager struct {
 	client    dynamic.Interface
@@ -55,11 +59,11 @@ func New(client dynamic.Interface, namespace string, cfg config.HTTPRouteConfig)
 func (m *Manager) Ensure(ctx context.Context, d store.Driver) {
 	m.updateWithRetry(ctx, "add rule for "+d.AppSelector, func(rules []interface{}) []interface{} {
 		for _, r := range rules {
-			if ruleMatchesDriver(r, d.AppSelector, m.cfg.DriverPathPrefix) {
+			if ruleMatchesDriver(r, d.AppSelector, driverPathPrefix) {
 				return nil // already present, no update needed
 			}
 		}
-		return insertBeforeLast(rules, buildDriverRule(d, m.cfg.DriverPathPrefix))
+		return insertBeforeLast(rules, buildDriverRule(d, driverPathPrefix))
 	})
 }
 
@@ -69,7 +73,7 @@ func (m *Manager) Ensure(ctx context.Context, d store.Driver) {
 // The operation retries on conflict.
 func (m *Manager) Delete(ctx context.Context, appSelector string) {
 	m.updateWithRetry(ctx, "remove rule for "+appSelector, func(rules []interface{}) []interface{} {
-		filtered := removeDriverRule(rules, appSelector, m.cfg.DriverPathPrefix)
+		filtered := removeDriverRule(rules, appSelector, driverPathPrefix)
 		if len(filtered) == len(rules) {
 			return nil // rule was not present, no update needed
 		}
@@ -93,7 +97,7 @@ func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) {
 		changed := false
 
 		for _, r := range rules {
-			sel := driverSelector(r, m.cfg.DriverPathPrefix)
+			sel := driverSelector(r, driverPathPrefix)
 			if sel == "" {
 				kept = append(kept, r) // catch-all or other non-driver rule; always keep
 				continue
@@ -110,7 +114,7 @@ func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) {
 		for _, d := range active {
 			if !presentSelectors[d.AppSelector] {
 				log.Printf("httproute: reconcile: adding missing rule for %s", d.AppSelector)
-				kept = insertBeforeLast(kept, buildDriverRule(d, m.cfg.DriverPathPrefix))
+				kept = insertBeforeLast(kept, buildDriverRule(d, driverPathPrefix))
 				changed = true
 			}
 		}
