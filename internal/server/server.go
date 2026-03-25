@@ -35,16 +35,19 @@ type driverView struct {
 	Duration string
 }
 
+// dashboardPath is the canonical URL path for the dashboard page.
+// All other paths redirect here.
+const dashboardPath = driverPathPrefix
+
 // Handler returns an http.Handler that serves the Spark driver list.
-// Requests whose URL path is not exactly "/" are redirected to "/" so that
-// relative links in the page resolve correctly regardless of how the gateway
-// routes traffic to this handler.
-// Per-driver links use the fixed "/proxy/" prefix required by Spark UI to
-// resolve its internal asset paths correctly.
+// The dashboard is served at /proxy/ (the fixed driverPathPrefix), which is
+// treated as the canonical URL for the dashboard. Any request whose path is
+// not exactly "/proxy/" is redirected there with a 302 to keep a single,
+// stable entry point regardless of how the gateway routes traffic to this handler.
 func Handler(s *store.Store, now func() time.Time) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.Redirect(w, r, "/", http.StatusFound)
+		if r.URL.Path != dashboardPath {
+			http.Redirect(w, r, dashboardPath, http.StatusFound)
 			return
 		}
 
