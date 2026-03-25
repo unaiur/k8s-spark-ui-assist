@@ -318,6 +318,40 @@ func TestReconcileCreatesMissingRoutes(t *testing.T) {
 	}
 }
 
+// TestEnsureSanitizesAppSelectorInRouteName verifies that an appSelector
+// containing characters invalid in DNS-1123 names (uppercase, dots,
+// underscores) is lowercased and those characters replaced with "-".
+func TestEnsureSanitizesAppSelectorInRouteName(t *testing.T) {
+	cases := []struct {
+		appSelector   string
+		wantRouteName string
+	}{
+		{"spark-abc123", "spark-abc123-ui-route"},
+		{"Spark_App.123", "spark-app-123-ui-route"},
+		{"UPPER_CASE", "upper-case-ui-route"},
+		{"with.dots", "with-dots-ui-route"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.appSelector, func(t *testing.T) {
+			client := dynamicfake.NewSimpleDynamicClient(newScheme())
+			mgr := newManager(client)
+			ctx := context.Background()
+
+			mgr.Ensure(ctx, newDriver(tc.appSelector, "job"))
+
+			if !routeExists(t, client, tc.wantRouteName) {
+				routes := listRoutes(t, client)
+				names := make([]string, len(routes))
+				for i, r := range routes {
+					names[i] = r.GetName()
+				}
+				t.Errorf("expected HTTPRoute %q to exist; found: %v", tc.wantRouteName, names)
+			}
+		})
+	}
+}
+
 // TestReconcileNoopWhenUpToDate verifies that Reconcile does not perform
 // create or delete calls when nothing needs changing.
 func TestReconcileNoopWhenUpToDate(t *testing.T) {

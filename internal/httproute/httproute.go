@@ -12,7 +12,11 @@ package httproute
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"log"
+	"regexp"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -51,9 +55,35 @@ func New(client dynamic.Interface, namespace string, cfg config.HTTPRouteConfig)
 	return &Manager{client: client, namespace: namespace, cfg: cfg}
 }
 
-// routeName returns the HTTPRoute name for a given appSelector.
+// invalidDNSChars matches any character not allowed in a DNS-1123 label.
+var invalidDNSChars = regexp.MustCompile(`[^a-z0-9-]`)
+
+// routeName converts appSelector into a valid DNS-1123 subdomain name and
+// appends "-ui-route". Kubernetes label values allow uppercase letters, dots,
+// underscores, and up to 63 characters, none of which are universally valid in
+// resource names. The sanitisation steps are:
+//  1. Lowercase the selector.
+//  2. Replace any character that is not [a-z0-9-] with "-".
+//  3. If the result (plus the "-ui-route" suffix) exceeds 253 characters,
+//     truncate and append an 8-hex-character hash of the original selector so
+//     the name remains unique and deterministic.
 func routeName(appSelector string) string {
-	return appSelector + "-ui-route"
+	const suffix = "-ui-route"
+	const maxLen = 253
+
+	sanitized := invalidDNSChars.ReplaceAllString(strings.ToLower(appSelector), "-")
+
+	candidate := sanitized + suffix
+	if len(candidate) <= maxLen {
+		return candidate
+	}
+
+	// Hash the original selector to preserve uniqueness.
+	h := sha256.Sum256([]byte(appSelector))
+	hash := fmt.Sprintf("%x", h[:4]) // 8 hex chars
+	// Truncate sanitized so that sanitized + "-" + hash + suffix fits in maxLen.
+	maxSanitized := maxLen - len(suffix) - 1 - len(hash)
+	return sanitized[:maxSanitized] + "-" + hash + suffix
 }
 
 // Ensure creates the per-driver HTTPRoute if it does not already exist.
@@ -73,6 +103,9 @@ func (m *Manager) Ensure(ctx context.Context, d store.Driver) {
 
 	route := buildRoute(d, m.cfg, m.namespace, driverPathPrefix)
 	if _, err := rc.Create(ctx, route, metav1.CreateOptions{}); err != nil {
+		if errors.IsAlreadyExists(err) {
+			return // created by a concurrent Ensure call; desired state is already met
+		}
 		log.Printf("httproute: ensure %s: failed to create: %v", name, err)
 		return
 	}
@@ -136,7 +169,7 @@ func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) {
 		}
 		log.Printf("httproute: reconcile: creating missing HTTPRoute %s", name)
 		route := buildRoute(d, m.cfg, m.namespace, driverPathPrefix)
-		if _, createErr := rc.Create(ctx, route, metav1.CreateOptions{}); createErr != nil {
+		if _, createErr := rc.Create(ctx, route, metav1.CreateOptions{}); createErr != nil && !errors.IsAlreadyExists(createErr) {
 			log.Printf("httproute: reconcile: failed to create %s: %v", name, createErr)
 		}
 	}

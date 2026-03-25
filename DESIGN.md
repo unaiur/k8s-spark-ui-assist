@@ -124,8 +124,11 @@ plain `map[string]interface{}` values against the GVR
 
 The **Helm chart** creates and owns one HTTPRoute for the dashboard (named after the Helm
 release). The Go service creates a **separate HTTPRoute per active Spark driver**, named
-`<appSelector>-ui-route`. Each driver route contains exactly one rule:
-`PathPrefix /proxy/<appSelector>` → port 4040 with a `ReplacePrefixMatch: /` URL rewrite.
+`<appSelector>-ui-route`. Each driver route contains three rules: two 302 redirect rules
+for bare `/proxy/<appSelector>` requests (with and without trailing slash) that send the
+user to `/proxy/<appSelector>/jobs/`, plus a `PathPrefix /proxy/<appSelector>` forward
+rule to port 4040 with a `ReplacePrefixMatch: /` URL rewrite. See the **Rule structure**
+section below for full details.
 All driver-managed routes carry the label `app.kubernetes.io/managed-by: spark-ui-assist`
 so that Reconcile can list them with a single label-selector query.
 
