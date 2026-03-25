@@ -13,6 +13,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	"github.com/unaiur/k8s-spark-ui-assist/internal/api"
+	"github.com/unaiur/k8s-spark-ui-assist/internal/labels"
 )
 
 const namespace = "default"
@@ -38,11 +39,11 @@ func newHandler(client *dynamicfake.FakeDynamicClient) http.Handler {
 // pod is still being scheduled or initialised).  If condReason is non-empty a
 // PodScheduled=False condition with that reason is added (e.g. "Unschedulable").
 func makePendingPod(appID string, condReason string) *unstructured.Unstructured {
-	labels := map[string]interface{}{
-		"app.kubernetes.io/instance": "spark-job",
-		"spark-role":                 "driver",
-		"spark-app-selector":         appID,
-		"spark-app-name":             "my-job",
+	podLabels := map[string]interface{}{
+		labels.LabelInstance: labels.InstanceValue,
+		labels.LabelRole:     labels.RoleValue,
+		labels.LabelSelector: appID,
+		labels.LabelAppName:  "my-job",
 	}
 
 	pod := &unstructured.Unstructured{
@@ -52,7 +53,7 @@ func makePendingPod(appID string, condReason string) *unstructured.Unstructured 
 			"metadata": map[string]interface{}{
 				"name":      appID + "-driver",
 				"namespace": namespace,
-				"labels":    labels,
+				"labels":    podLabels,
 			},
 			"status": map[string]interface{}{},
 		},
@@ -74,12 +75,13 @@ func makePendingPod(appID string, condReason string) *unstructured.Unstructured 
 
 // makePod creates a fake pod with the given appID and containerStatus state.
 // containerState should be one of "waiting", "running", "terminated", or "" (no status yet).
-func makePod(appID string, containerState string, reason string, exitCode int64) *unstructured.Unstructured {
-	labels := map[string]interface{}{
-		"app.kubernetes.io/instance": "spark-job",
-		"spark-role":                 "driver",
-		"spark-app-selector":         appID,
-		"spark-app-name":             "my-job",
+// exitCode uses float64 to match the type produced by real Kubernetes JSON decoding.
+func makePod(appID string, containerState string, reason string, exitCode float64) *unstructured.Unstructured {
+	podLabels := map[string]interface{}{
+		labels.LabelInstance: labels.InstanceValue,
+		labels.LabelRole:     labels.RoleValue,
+		labels.LabelSelector: appID,
+		labels.LabelAppName:  "my-job",
 	}
 
 	pod := &unstructured.Unstructured{
@@ -89,7 +91,7 @@ func makePod(appID string, containerState string, reason string, exitCode int64)
 			"metadata": map[string]interface{}{
 				"name":      appID + "-driver",
 				"namespace": namespace,
-				"labels":    labels,
+				"labels":    podLabels,
 			},
 			"status": map[string]interface{}{},
 		},
@@ -110,6 +112,8 @@ func makePod(appID string, containerState string, reason string, exitCode int64)
 				"startedAt": "2026-01-01T00:00:00Z",
 			}
 		case "terminated":
+			// exitCode is stored as float64 to match the type produced by JSON
+			// decoding of real Kubernetes API responses.
 			terminatedMap := map[string]interface{}{
 				"exitCode": exitCode,
 			}
@@ -271,6 +275,23 @@ func TestEmptyAppIDReturnsNotFound(t *testing.T) {
 	}
 }
 
+// TestInvalidAppIDReturnsBadRequest verifies that an appID containing characters
+// that are invalid in Kubernetes label values returns 400.
+func TestInvalidAppIDReturnsBadRequest(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	h := newHandler(client)
+
+	// Commas and equals signs are invalid in label values and are also selector
+	// metacharacters, making injection possible without validation.
+	code, body := getJSON(t, h, "/proxy/api/bad,app=id")
+	if code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", code)
+	}
+	if body["error"] == "" {
+		t.Error("expected non-empty error field")
+	}
+}
+
 // TestOnlyDriverPodsMatched verifies that pods without the correct Spark driver
 // labels are not returned even if they share the same spark-app-selector.
 func TestOnlyDriverPodsMatched(t *testing.T) {
@@ -285,8 +306,8 @@ func TestOnlyDriverPodsMatched(t *testing.T) {
 				"name":      "spark-abc-executor",
 				"namespace": namespace,
 				"labels": map[string]interface{}{
-					"app.kubernetes.io/instance": "spark-job",
-					"spark-app-selector":         "spark-abc",
+					labels.LabelInstance: labels.InstanceValue,
+					labels.LabelSelector: "spark-abc",
 					// no spark-role=driver
 				},
 			},

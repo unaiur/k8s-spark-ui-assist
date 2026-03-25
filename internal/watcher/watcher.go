@@ -14,17 +14,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/tools/cache"
 
+	"github.com/unaiur/k8s-spark-ui-assist/internal/labels"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/store"
-)
-
-const (
-	labelInstance = "app.kubernetes.io/instance"
-	labelRole     = "spark-role"
-	labelSelector = "spark-app-selector"
-	labelAppName  = "spark-app-name"
-
-	instanceValue = "spark-job"
-	roleValue     = "driver"
 )
 
 var podGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
@@ -72,7 +63,7 @@ func Watch(ctx context.Context, lw cache.ListerWatcher, s *store.Store, h Handle
 				if isTerminated(pod) {
 					s.Remove(pod.GetName())
 					if h != nil {
-						h.OnRemove(pod.GetLabels()[labelSelector])
+						h.OnRemove(pod.GetLabels()[labels.LabelSelector])
 					}
 					return
 				}
@@ -102,7 +93,7 @@ func Watch(ctx context.Context, lw cache.ListerWatcher, s *store.Store, h Handle
 				}
 				s.Remove(pod.GetName())
 				if h != nil {
-					h.OnRemove(pod.GetLabels()[labelSelector])
+					h.OnRemove(pod.GetLabels()[labels.LabelSelector])
 				}
 			},
 		},
@@ -122,7 +113,7 @@ func Watch(ctx context.Context, lw cache.ListerWatcher, s *store.Store, h Handle
 
 // NewListerWatcher returns a ListerWatcher scoped to Spark driver pods in the given namespace.
 func NewListerWatcher(namespace string, client dynamic.Interface) cache.ListerWatcher {
-	labelSel := labelInstance + "=" + instanceValue + "," + labelRole + "=" + roleValue
+	labelSel := labels.DriverSelector()
 	rc := client.Resource(podGVR).Namespace(namespace)
 	return &cache.ListWatch{
 		ListFunc: func(opts metav1.ListOptions) (runtime.Object, error) {
@@ -137,8 +128,8 @@ func NewListerWatcher(namespace string, client dynamic.Interface) cache.ListerWa
 }
 
 func isSparkDriver(pod *unstructured.Unstructured) bool {
-	labels := pod.GetLabels()
-	return labels[labelInstance] == instanceValue && labels[labelRole] == roleValue
+	podLabels := pod.GetLabels()
+	return podLabels[labels.LabelInstance] == labels.InstanceValue && podLabels[labels.LabelRole] == labels.RoleValue
 }
 
 func isTerminated(pod *unstructured.Unstructured) bool {
@@ -147,7 +138,7 @@ func isTerminated(pod *unstructured.Unstructured) bool {
 }
 
 func driverFromPod(pod *unstructured.Unstructured) store.Driver {
-	labels := pod.GetLabels()
+	podLabels := pod.GetLabels()
 	createdAt := pod.GetCreationTimestamp().Time
 	if createdAt.IsZero() {
 		createdAt = time.Now()
@@ -155,7 +146,7 @@ func driverFromPod(pod *unstructured.Unstructured) store.Driver {
 	return store.Driver{
 		PodName:     pod.GetName(),
 		CreatedAt:   createdAt,
-		AppSelector: labels[labelSelector],
-		AppName:     labels[labelAppName],
+		AppSelector: podLabels[labels.LabelSelector],
+		AppName:     podLabels[labels.LabelAppName],
 	}
 }

@@ -10,6 +10,7 @@
 //
 //	  Responses:
 //	    200  {"appID":"…","state":"…"}
+//	    400  {"error":"invalid appID"}           – appID is not a valid label value
 //	    404  {"error":"driver not found"}        – no matching pod
 //	    405  {"error":"method not allowed"}      – non-GET request
 //	    500  {"error":"…"}                       – Kubernetes API error
@@ -24,24 +25,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
+
+	"github.com/unaiur/k8s-spark-ui-assist/internal/labels"
 )
 
 // apiPrefix is the URL path prefix under which all API endpoints are mounted.
 const apiPrefix = "/proxy/api/"
 
 var podGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
-
-// The label selectors used to identify Spark driver pods — must stay in sync
-// with the watcher package.
-const (
-	labelInstance = "app.kubernetes.io/instance"
-	labelRole     = "spark-role"
-	labelSelector = "spark-app-selector"
-
-	instanceValue = "spark-job"
-	roleValue     = "driver"
-)
 
 // Handler returns an http.Handler that serves all /proxy/api/ endpoints.
 // namespace is the Kubernetes namespace to query for driver pods.
@@ -52,6 +45,13 @@ func Handler(client dynamic.Interface, namespace string) http.Handler {
 		// Reject empty appID or nested paths (e.g. /proxy/api/foo/bar).
 		if appID == "" || strings.Contains(appID, "/") {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+
+		// Validate appID as a Kubernetes label value to prevent injection into
+		// the label selector and to return a meaningful 400 instead of a 500.
+		if errs := validation.IsValidLabelValue(appID); len(errs) > 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid appID"})
 			return
 		}
 
@@ -87,12 +87,8 @@ func Handler(client dynamic.Interface, namespace string) http.Handler {
 //     False PodScheduled condition and return its reason (e.g. "Unschedulable");
 //     otherwise return "Pending".
 func driverState(ctx context.Context, client dynamic.Interface, namespace, appID string) (string, error) {
-	labelSel := labelInstance + "=" + instanceValue +
-		"," + labelRole + "=" + roleValue +
-		"," + labelSelector + "=" + appID
-
 	list, err := client.Resource(podGVR).Namespace(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: labelSel,
+		LabelSelector: labels.DriverSelectorForApp(appID),
 	})
 	if err != nil {
 		return "", err
@@ -178,14 +174,36 @@ func containerStateString(cs map[string]interface{}) string {
 		if reason, _ := terminated["reason"].(string); reason != "" {
 			return reason
 		}
-		exitCode, _, _ := unstructured.NestedFieldNoCopy(terminated, "exitCode")
-		if code, ok := exitCode.(int64); ok && code == 0 {
+		// exitCode may be int64 (from fake client) or float64 (from real JSON
+		// decoding), so handle both rather than relying on a single type assertion.
+		if isZeroExitCode(terminated) {
 			return "Completed"
 		}
 		return "Error"
 	}
 
 	return ""
+}
+
+// isZeroExitCode reports whether the exitCode field in a terminated container
+// status map is zero.  The Kubernetes API returns JSON numbers which are decoded
+// as float64 by the unstructured machinery; test fixtures may use int64.  Both
+// are handled explicitly.
+func isZeroExitCode(terminated map[string]interface{}) bool {
+	val, ok := terminated["exitCode"]
+	if !ok {
+		return false
+	}
+	switch v := val.(type) {
+	case int64:
+		return v == 0
+	case float64:
+		return v == 0
+	case int:
+		return v == 0
+	default:
+		return false
+	}
 }
 
 // writeJSON writes a JSON-encoded body with the given HTTP status code.
