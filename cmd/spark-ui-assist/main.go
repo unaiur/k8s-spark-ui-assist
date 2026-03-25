@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/unaiur/k8s-spark-ui-assist/internal/api"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/config"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/httproute"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/server"
@@ -52,6 +53,7 @@ func main() {
 	go watcher.Watch(ctx, lw, s, routeHandler, onSynced)
 
 	mux := http.NewServeMux()
+	mux.Handle("/proxy/api/", api.Handler(dynClient, cfg.Namespace))
 	mux.Handle("/", server.Handler(s, time.Now))
 
 	srv := &http.Server{
