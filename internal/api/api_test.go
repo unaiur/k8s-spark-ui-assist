@@ -34,6 +34,44 @@ func newHandler(client *dynamicfake.FakeDynamicClient) http.Handler {
 	return api.Handler(client, namespace)
 }
 
+// makePendingPod creates a fake pod that has no container statuses yet (i.e. the
+// pod is still being scheduled or initialised).  If condReason is non-empty a
+// PodScheduled=False condition with that reason is added (e.g. "Unschedulable").
+func makePendingPod(appID string, condReason string) *unstructured.Unstructured {
+	labels := map[string]interface{}{
+		"app.kubernetes.io/instance": "spark-job",
+		"spark-role":                 "driver",
+		"spark-app-selector":         appID,
+		"spark-app-name":             "my-job",
+	}
+
+	pod := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "Pod",
+			"metadata": map[string]interface{}{
+				"name":      appID + "-driver",
+				"namespace": namespace,
+				"labels":    labels,
+			},
+			"status": map[string]interface{}{},
+		},
+	}
+	pod.SetCreationTimestamp(metav1.Now())
+
+	if condReason != "" {
+		_ = unstructured.SetNestedSlice(pod.Object, []interface{}{
+			map[string]interface{}{
+				"type":   "PodScheduled",
+				"status": "False",
+				"reason": condReason,
+			},
+		}, "status", "conditions")
+	}
+
+	return pod
+}
+
 // makePod creates a fake pod with the given appID and containerStatus state.
 // containerState should be one of "waiting", "running", "terminated", or "" (no status yet).
 func makePod(appID string, containerState string, reason string, exitCode int64) *unstructured.Unstructured {
@@ -261,5 +299,37 @@ func TestOnlyDriverPodsMatched(t *testing.T) {
 	code, body := getJSON(t, h, "/proxy/api/spark-abc")
 	if code != http.StatusNotFound {
 		t.Errorf("expected 404 (non-driver pod should not match), got %d; body: %v", code, body)
+	}
+}
+
+// TestPendingDriverNoConditions verifies that a pod with no container statuses and
+// no scheduling conditions returns state "Pending".
+func TestPendingDriverNoConditions(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	addPod(t, client, makePendingPod("spark-abc", ""))
+	h := newHandler(client)
+
+	code, body := getJSON(t, h, "/proxy/api/spark-abc")
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if body["state"] != "Pending" {
+		t.Errorf("expected state Pending, got %q", body["state"])
+	}
+}
+
+// TestPendingDriverUnschedulable verifies that a pod with a PodScheduled=False
+// condition with reason "Unschedulable" returns that reason as the state.
+func TestPendingDriverUnschedulable(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	addPod(t, client, makePendingPod("spark-abc", "Unschedulable"))
+	h := newHandler(client)
+
+	code, body := getJSON(t, h, "/proxy/api/spark-abc")
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if body["state"] != "Unschedulable" {
+		t.Errorf("expected state Unschedulable, got %q", body["state"])
 	}
 }
