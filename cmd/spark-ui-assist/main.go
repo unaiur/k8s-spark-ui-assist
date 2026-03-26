@@ -52,6 +52,9 @@ func main() {
 		if err := mgr.Reconcile(ctx, s.ListRunning()); err != nil {
 			log.Printf("httproute: initial reconcile failed: %v", err)
 		}
+		// Always ensure the fallback root route exists so "/" is reachable
+		// immediately after startup, before any SHS state is known.
+		mgr.EnsureFallbackRootRoute(ctx)
 	}
 	go watcher.Watch(ctx, lw, s, routeHandler, onSynced)
 

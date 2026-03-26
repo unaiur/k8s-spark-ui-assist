@@ -29,6 +29,7 @@ var testCfg = config.HTTPRouteConfig{
 	Hostname:         "spark.example.com",
 	GatewayName:      "main-gateway",
 	GatewayNamespace: "gateway-ns",
+	SelfService:      "spark-ui-assist",
 }
 
 // newScheme returns a minimal scheme that knows about HTTPRoute and HTTPRouteList.
@@ -422,6 +423,70 @@ func TestEnsureSHSRouteNoopWhenNotConfigured(t *testing.T) {
 
 	if routes := listRoutes(t, client); len(routes) != 0 {
 		t.Errorf("expected 0 routes, got %d", len(routes))
+	}
+}
+
+// TestEnsureFallbackRootRouteWorksWithoutSHSService verifies that
+// EnsureFallbackRootRoute creates the root route even when SHSService is not
+// configured (i.e. SelfService alone is sufficient).
+func TestEnsureFallbackRootRouteWorksWithoutSHSService(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	mgr := newManager(client) // testCfg has SelfService but no SHSService
+	ctx := context.Background()
+
+	mgr.EnsureFallbackRootRoute(ctx)
+
+	routeName := "spark-ui-assist-root-route"
+	if !routeExists(t, client, routeName) {
+		t.Fatalf("expected HTTPRoute %s to exist after EnsureFallbackRootRoute", routeName)
+	}
+	route, _ := client.Resource(httpRouteGVR).Namespace(namespace).Get(ctx, routeName, metav1.GetOptions{})
+	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+	backends, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "backendRefs")
+	backendName, _, _ := unstructured.NestedString(backends[0].(map[string]interface{}), "name")
+	if backendName != testCfg.SelfService {
+		t.Errorf("expected backend %q, got %q", testCfg.SelfService, backendName)
+	}
+}
+
+// TestReconcileDoesNotDeleteRootRouteWithoutSHSService verifies that Reconcile
+// leaves the root route untouched even when SHSService is not configured.
+func TestReconcileDoesNotDeleteRootRouteWithoutSHSService(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	mgr := newManager(client) // testCfg: SelfService set, SHSService not set
+	ctx := context.Background()
+
+	mgr.EnsureFallbackRootRoute(ctx)
+
+	if err := mgr.Reconcile(ctx, nil); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	if !routeExists(t, client, "spark-ui-assist-root-route") {
+		t.Fatal("Reconcile must not delete the root route")
+	}
+}
+
+// TestApplyRouteUpdatesInPlace verifies that calling EnsureFallbackRootRoute
+// twice does not create a second route — it updates the existing one in-place.
+func TestApplyRouteUpdatesInPlace(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	mgr := newManagerSHS(client)
+	ctx := context.Background()
+
+	mgr.EnsureFallbackRootRoute(ctx) // create
+	mgr.EnsureSHSRoute(ctx)          // update (SHS up)
+	mgr.EnsureFallbackRootRoute(ctx) // update (SHS down)
+
+	routes := listRoutes(t, client)
+	if len(routes) != 1 {
+		t.Fatalf("expected exactly 1 route after 3 apply calls, got %d", len(routes))
+	}
+	rules, _, _ := unstructured.NestedSlice(routes[0].Object, "spec", "rules")
+	backends, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "backendRefs")
+	backendName, _, _ := unstructured.NestedString(backends[0].(map[string]interface{}), "name")
+	if backendName != testCfgSHS.SelfService {
+		t.Errorf("expected final backend %q, got %q", testCfgSHS.SelfService, backendName)
 	}
 }
 

@@ -1,5 +1,5 @@
-// Package httproute manages per-driver Gateway API HTTPRoutes and the optional
-// Spark History Server (SHS) root HTTPRoute.
+// Package httproute manages per-driver Gateway API HTTPRoutes and the root
+// HTTPRoute that covers the "/" path.
 //
 // # Per-driver routes
 //
@@ -10,19 +10,21 @@
 // all routes it owns and clean up any that belong to drivers that are no longer
 // active.
 //
-// # SHS root route
+// # Root route ("<selfService>-root-route")
 //
-// When cfg.SHSService is set the Manager also manages a single HTTPRoute named
-// "<selfService>-root-route" for the "/" path:
+// The Manager always maintains a single HTTPRoute named
+// "<selfService>-root-route" for the "/" path. It is created (pointing to this
+// service itself) as soon as the pod informer has synced, so "/" is always
+// reachable via the dashboard.
 //
-//   - EnsureSHSRoute: creates (or replaces) the root route pointing to the SHS
-//     service. This is called when the SHS Endpoints transitions to ≥1 ready
-//     address.
-//   - EnsureFallbackRootRoute: creates (or replaces) the root route pointing to
-//     this service itself (cfg.SelfService). This is called when SHS goes down so
-//     that "/" still works and shows the dashboard.
-//   - DeleteRootRoute: deletes the root route entirely. Called on shutdown or
-//     when SHS integration is disabled.
+// When cfg.SHSService is set the root route backend is switched dynamically:
+//
+//   - EnsureSHSRoute: updates the root route to point "/" → SHS service.
+//     Called when SHS Endpoints transitions to ≥1 ready address.
+//   - EnsureFallbackRootRoute: creates or updates the root route to point
+//     "/" → this service itself. Called on startup (always) and when SHS goes
+//     down.
+//   - DeleteRootRoute: deletes the root route on shutdown.
 //
 // Reconcile() should be called once the pod informer has fully synced so that
 // stale routes left over from a previous instance of the service are cleaned up.
@@ -93,18 +95,19 @@ func (m *Manager) createDriverRoute(d store.Driver) error {
 	return err
 }
 
-// applyRoute creates or replaces the HTTPRoute (delete-then-create semantics to
-// handle spec changes without needing strategic-merge-patch on an unstructured
-// object).
+// applyRoute creates the HTTPRoute if it does not exist, or updates it in-place
+// if it does. Using update (rather than delete-then-create) avoids a brief gap
+// during which no route exists.
 func (m *Manager) applyRoute(route *unstructured.Unstructured) error {
 	name := route.GetName()
-	_, getErr := m.getRoute(name)
+	existing, getErr := m.getRoute(name)
 	if getErr == nil {
-		// Already exists — delete first so we can recreate with the new spec.
-		if delErr := m.deleteRoute(name); delErr != nil && !errors.IsNotFound(delErr) {
-			return delErr
-		}
-	} else if !errors.IsNotFound(getErr) {
+		// Already exists — carry over the resourceVersion required for updates.
+		route.SetResourceVersion(existing.GetResourceVersion())
+		_, err := m.client.Resource(httpRouteGVR).Namespace(m.namespace).Update(m.ctx, route, metav1.UpdateOptions{})
+		return err
+	}
+	if !errors.IsNotFound(getErr) {
 		return getErr
 	}
 	_, err := m.client.Resource(httpRouteGVR).Namespace(m.namespace).Create(m.ctx, route, metav1.CreateOptions{})
@@ -168,8 +171,8 @@ func (m *Manager) Delete(ctx context.Context, appSelector string) {
 	log.Printf("httproute: deleted HTTPRoute %s", name)
 }
 
-// EnsureSHSRoute creates (or replaces) the root HTTPRoute pointing "/" to the
-// Spark History Server. Call this when SHS transitions to having ≥1 ready pod.
+// EnsureSHSRoute updates the root HTTPRoute to point "/" to the Spark History
+// Server. Call this when SHS transitions to having ≥1 ready pod.
 // No-op when SHSService is not configured.
 func (m *Manager) EnsureSHSRoute(ctx context.Context) {
 	if m.cfg.SHSService == "" {
@@ -181,15 +184,15 @@ func (m *Manager) EnsureSHSRoute(ctx context.Context) {
 		log.Printf("httproute: EnsureSHSRoute %s: %v", name, err)
 		return
 	}
-	log.Printf("httproute: applied SHS root HTTPRoute %s → service %s", name, m.cfg.SHSService)
+	log.Printf("httproute: root HTTPRoute %s → service %s (SHS up)", name, m.cfg.SHSService)
 }
 
-// EnsureFallbackRootRoute creates (or replaces) the root HTTPRoute pointing "/"
-// to this service itself. Call this when SHS transitions to having 0 ready pods
-// so the dashboard remains accessible at "/". No-op when SHSService is not
-// configured (the static Helm chart HTTPRoute already handles "/" in that case).
+// EnsureFallbackRootRoute creates or updates the root HTTPRoute to point "/"
+// to this service itself (the dashboard). This is called on startup so that
+// "/" is always reachable, and again whenever SHS goes down.
+// No-op when SelfService is not configured.
 func (m *Manager) EnsureFallbackRootRoute(ctx context.Context) {
-	if m.cfg.SHSService == "" || m.cfg.SelfService == "" {
+	if m.cfg.SelfService == "" {
 		return
 	}
 	name := m.rootRouteName()
@@ -198,13 +201,13 @@ func (m *Manager) EnsureFallbackRootRoute(ctx context.Context) {
 		log.Printf("httproute: EnsureFallbackRootRoute %s: %v", name, err)
 		return
 	}
-	log.Printf("httproute: applied fallback root HTTPRoute %s → service %s", name, m.cfg.SelfService)
+	log.Printf("httproute: root HTTPRoute %s → service %s (fallback)", name, m.cfg.SelfService)
 }
 
 // DeleteRootRoute deletes the managed root HTTPRoute. It is a no-op when the
-// route does not exist or SHSService is not configured.
+// route does not exist or SelfService is not configured.
 func (m *Manager) DeleteRootRoute(ctx context.Context) {
-	if m.cfg.SHSService == "" {
+	if m.cfg.SelfService == "" {
 		return
 	}
 	name := m.rootRouteName()
@@ -231,9 +234,10 @@ func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) error {
 		wantedByName[d.RouteName()] = d
 	}
 
-	// The root route (if any) is managed separately; exclude it from driver reconciliation.
+	// The root route is managed separately by EnsureFallbackRootRoute /
+	// EnsureSHSRoute; exclude it from driver reconciliation.
 	rootName := ""
-	if m.cfg.SHSService != "" {
+	if m.cfg.SelfService != "" {
 		rootName = m.rootRouteName()
 	}
 
