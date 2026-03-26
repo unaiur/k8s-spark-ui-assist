@@ -16,6 +16,12 @@ type Config struct {
 
 	// HTTPRoute feature configuration.
 	HTTPRoute HTTPRouteConfig
+
+	// InjectScript is the JavaScript content served verbatim at
+	// /proxy/api/spark-inject.js. When empty the endpoint returns 404 and
+	// the Service Worker still injects the <script> tag but the browser
+	// will report a failed load (no functional impact). EXPERIMENTAL.
+	InjectScript string
 }
 
 // HTTPRouteConfig holds configuration for the HTTPRoute creation feature.
@@ -43,6 +49,7 @@ func Parse() *Config {
 	flag.StringVar(&cfg.HTTPRoute.GatewayNamespace, "http-route.gateway-namespace", "", "Gateway namespace for HTTPRoute spec.parentRefs[0].namespace")
 	flag.StringVar(&cfg.HTTPRoute.SelfService, "self-service", "", "Kubernetes Service name for this application (used to build root HTTPRoute)")
 	flag.StringVar(&cfg.HTTPRoute.SHSService, "shs-service", "", "Kubernetes Service name for the Spark History Server (optional)")
+	flag.StringVar(&cfg.InjectScript, "inject-script", "", "JavaScript content to serve at /proxy/api/spark-inject.js (EXPERIMENTAL, optional)")
 
 	flag.Parse()
 

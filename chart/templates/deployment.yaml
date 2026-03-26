@@ -42,6 +42,9 @@ spec:
             {{- if .Values.shsService }}
             - -shs-service={{ .Values.shsService }}
             {{- end }}
+            {{- if .Values.injectScript }}
+            - -inject-script={{ .Values.injectScript }}
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080
