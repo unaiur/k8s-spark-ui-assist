@@ -16,6 +16,7 @@ import (
 	"github.com/unaiur/k8s-spark-ui-assist/internal/api"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/config"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/httproute"
+	k8ssvc "github.com/unaiur/k8s-spark-ui-assist/internal/k8s"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/server"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/store"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/watcher"
@@ -39,7 +40,9 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	mgr := httproute.New(dynClient, cfg.Namespace, cfg.HTTPRoute)
+	svc := k8ssvc.New(ctx, dynClient, cfg.Namespace)
+
+	mgr := httproute.New(svc, cfg.HTTPRoute)
 	// Ensure routes for already-running drivers once the informer has synced;
 	// handled via OnAdd callbacks triggered by the initial List.
 	routeHandler := &httpRouteHandler{ctx: ctx, mgr: mgr}
@@ -53,7 +56,7 @@ func main() {
 	go watcher.Watch(ctx, lw, s, routeHandler, onSynced)
 
 	mux := http.NewServeMux()
-	mux.Handle("/proxy/api/state/", api.Handler(dynClient, cfg.Namespace))
+	mux.Handle("/proxy/api/state/", api.Handler(svc))
 	mux.Handle("/", server.Handler(s, time.Now))
 
 	srv := &http.Server{
