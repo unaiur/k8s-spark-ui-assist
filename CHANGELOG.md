@@ -1,5 +1,33 @@
 # Changelog
 
+## [2.0.0](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.5.1...v2.0.0) (2026-03-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* replace shared HTTPRoute with per-driver HTTPRoutes ([#27](https://github.com/unaiur/k8s-spark-ui-assist/issues/27))
+* remove configurable driver path prefix, document spark.ui.reverseProxy ([#25](https://github.com/unaiur/k8s-spark-ui-assist/issues/25))
+
+### Features
+
+* add GET /proxy/api/{appID} endpoint to query Spark driver state ([a8adb83](https://github.com/unaiur/k8s-spark-ui-assist/commit/a8adb838d6d98f3e0e45ba5f2c2dbc3b7f58f207))
+* add GET /proxy/api/reconcile endpoint ([#31](https://github.com/unaiur/k8s-spark-ui-assist/issues/31)) ([c552d83](https://github.com/unaiur/k8s-spark-ui-assist/commit/c552d830f8aea5939cdb3faac38ad957314894d5))
+* gate HTTPRoute creation on pod Running phase ([c40be6f](https://github.com/unaiur/k8s-spark-ui-assist/commit/c40be6f60d33ca7f1bc87010d2ba964729d5a7b7))
+* manage SHS root HTTPRoute based on Endpoints availability ([#34](https://github.com/unaiur/k8s-spark-ui-assist/issues/34)) ([5ef5987](https://github.com/unaiur/k8s-spark-ui-assist/commit/5ef5987cabfb8d1a1429628c857657e21b0e3d63))
+* move dashboard to /proxy/, redirect all other paths there ([#28](https://github.com/unaiur/k8s-spark-ui-assist/issues/28)) ([a769b85](https://github.com/unaiur/k8s-spark-ui-assist/commit/a769b856ce35986c3f6b8c6ad49a6afcfcddc8c1))
+* remove configurable driver path prefix, document spark.ui.reverseProxy ([#25](https://github.com/unaiur/k8s-spark-ui-assist/issues/25)) ([1735d7b](https://github.com/unaiur/k8s-spark-ui-assist/commit/1735d7b193daf1a5406f4f237dc73fd31f5e785b))
+* replace shared HTTPRoute with per-driver HTTPRoutes ([#27](https://github.com/unaiur/k8s-spark-ui-assist/issues/27)) ([3546486](https://github.com/unaiur/k8s-spark-ui-assist/commit/35464868be865bd2c26cb16a26f89c28c465a63b))
+* serve contextual status page at /proxy/&lt;appID&gt;/ when HTTPRoute is absent ([#33](https://github.com/unaiur/k8s-spark-ui-assist/issues/33)) ([70ec9fb](https://github.com/unaiur/k8s-spark-ui-assist/commit/70ec9fb0cf758b462308b588271d389f3a9d9938))
+
+
+### Bug Fixes
+
+* address Copilot review comments on spark-job-api ([1b8b3e3](https://github.com/unaiur/k8s-spark-ui-assist/commit/1b8b3e399145cc61f43ca50070ee0bb907f9c855))
+* grant create, delete, list on httproutes in RBAC Role ([0350166](https://github.com/unaiur/k8s-spark-ui-assist/commit/0350166a199b47140467064486c69a5f2c47cbdb))
+* pending pod state derives waiting reason from conditions, not phase ([99361f7](https://github.com/unaiur/k8s-spark-ui-assist/commit/99361f794c218e4cb1d0f0f4f6c8b4849929d17d))
+* protect recordingHandler with mutex to eliminate data races under -race ([6f8bfdd](https://github.com/unaiur/k8s-spark-ui-assist/commit/6f8bfdd66f34f6ccb22db3358edd9a19e8fc9847))
+* rename endpoint to /proxy/api/state/{appID} ([879d179](https://github.com/unaiur/k8s-spark-ui-assist/commit/879d179082ff132313b7b4f7de0686173590cce3))
+
 ## [1.5.1](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.5.0...v1.5.1) (2026-03-23)
 
 
