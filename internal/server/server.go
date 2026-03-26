@@ -13,14 +13,43 @@ import (
 
 var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>Spark UIs</title></head>
+<head>
+<meta charset="utf-8">
+<title>Spark UIs</title>
+<style>
+  body { font-family: sans-serif; margin: 2em; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #ddd; }
+  th { background: #f4f4f4; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.85em;
+    font-weight: bold;
+    color: #fff;
+  }
+  .badge-running  { background: #2e7d32; }
+  .badge-pending  { background: #757575; }
+  .badge-unknown  { background: #e65100; }
+</style>
+</head>
 <body>
-<h1>Running Spark Jobs</h1>
-<ul>
-{{- range .}}
-<li><a href="{{.URL}}">{{.AppName}}</a> (running for {{.Duration}})</li>
-{{- end}}
-</ul>
+<h1>Spark Jobs</h1>
+<table>
+  <thead>
+    <tr><th>Job</th><th>State</th><th>Age</th></tr>
+  </thead>
+  <tbody>
+  {{- range .}}
+  <tr>
+    <td>{{if .URL}}<a href="{{.URL}}">{{.AppName}}</a>{{else}}{{.AppName}}{{end}}</td>
+    <td><span class="badge badge-{{.StateClass}}">{{.State}}</span></td>
+    <td>{{.Duration}}</td>
+  </tr>
+  {{- end}}
+  </tbody>
+</table>
 </body>
 </html>
 `))
@@ -30,9 +59,11 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
 const driverPathPrefix = "/proxy/"
 
 type driverView struct {
-	URL      string
-	AppName  string
-	Duration string
+	URL        template.URL
+	AppName    string
+	State      store.DriverState
+	StateClass string
+	Duration   string
 }
 
 // dashboardPath is the canonical URL path for the dashboard page.
@@ -60,10 +91,16 @@ func Handler(s *store.Store, now func() time.Time) http.Handler {
 		current := now()
 		views := make([]driverView, 0, len(drivers))
 		for _, d := range drivers {
+			var url template.URL
+			if d.State == store.StateRunning {
+				url = template.URL(driverPathPrefix + d.AppSelector + "/jobs/")
+			}
 			views = append(views, driverView{
-				URL:      driverPathPrefix + d.AppSelector + "/jobs/",
-				AppName:  d.AppName,
-				Duration: FormatDuration(current.Sub(d.CreatedAt)),
+				URL:        url,
+				AppName:    d.AppName,
+				State:      d.State,
+				StateClass: stateClass(d.State),
+				Duration:   FormatDuration(current.Sub(d.CreatedAt)),
 			})
 		}
 
@@ -72,6 +109,18 @@ func Handler(s *store.Store, now func() time.Time) http.Handler {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
 	})
+}
+
+// stateClass returns the CSS class suffix used to colour the state badge.
+func stateClass(s store.DriverState) string {
+	switch s {
+	case store.StateRunning:
+		return "running"
+	case store.StatePending:
+		return "pending"
+	default:
+		return "unknown"
+	}
 }
 
 // FormatDuration formats a duration as [N day(s) ]HH:MM:SS.

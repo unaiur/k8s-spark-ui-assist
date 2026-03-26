@@ -48,7 +48,7 @@ func Watch(ctx context.Context, lw cache.ListerWatcher, s *store.Store, h Handle
 				}
 				d := driverFromPod(pod)
 				s.Add(d)
-				if h != nil {
+				if h != nil && d.State == store.StateRunning {
 					h.OnAdd(d)
 				}
 			},
@@ -69,7 +69,7 @@ func Watch(ctx context.Context, lw cache.ListerWatcher, s *store.Store, h Handle
 				}
 				d := driverFromPod(pod)
 				s.Add(d)
-				if h != nil {
+				if h != nil && d.State == store.StateRunning {
 					h.OnAdd(d)
 				}
 			},
@@ -137,16 +137,32 @@ func isTerminated(pod *unstructured.Unstructured) bool {
 	return phase == "Succeeded" || phase == "Failed"
 }
 
+// stateFromPodPhase maps a Kubernetes pod phase string to a store.DriverState.
+// Only non-terminated phases are expected here (terminated pods are filtered
+// out before driverFromPod is called).
+func stateFromPodPhase(phase string) store.DriverState {
+	switch phase {
+	case "Running":
+		return store.StateRunning
+	case "Pending", "":
+		return store.StatePending
+	default:
+		return store.StateUnknown
+	}
+}
+
 func driverFromPod(pod *unstructured.Unstructured) store.Driver {
 	podLabels := pod.GetLabels()
 	createdAt := pod.GetCreationTimestamp().Time
 	if createdAt.IsZero() {
 		createdAt = time.Now()
 	}
+	phase, _, _ := unstructured.NestedString(pod.Object, "status", "phase")
 	return store.Driver{
 		PodName:     pod.GetName(),
 		CreatedAt:   createdAt,
 		AppSelector: podLabels[labels.LabelSelector],
 		AppName:     podLabels[labels.LabelAppName],
+		State:       stateFromPodPhase(phase),
 	}
 }

@@ -74,7 +74,29 @@ func TestConcurrency(t *testing.T) {
 	wg.Wait()
 }
 
-// ---- Driver.RouteName -------------------------------------------------------
+func TestListRunning(t *testing.T) {
+	s := New()
+	s.Add(Driver{PodName: "pod-running", AppSelector: "sel-1", State: StateRunning})
+	s.Add(Driver{PodName: "pod-pending", AppSelector: "sel-2", State: StatePending})
+	s.Add(Driver{PodName: "pod-unknown", AppSelector: "sel-3", State: StateUnknown})
+
+	running := s.ListRunning()
+	if len(running) != 1 {
+		t.Fatalf("expected 1 running driver, got %d", len(running))
+	}
+	if running[0].PodName != "pod-running" {
+		t.Errorf("expected pod-running, got %q", running[0].PodName)
+	}
+}
+
+func TestListRunningEmpty(t *testing.T) {
+	s := New()
+	s.Add(Driver{PodName: "pod-pending", State: StatePending})
+
+	if got := s.ListRunning(); len(got) != 0 {
+		t.Errorf("expected empty ListRunning, got %d entries", len(got))
+	}
+}
 
 func TestRouteNameSimple(t *testing.T) {
 	d := Driver{AppSelector: "spark-abc123"}

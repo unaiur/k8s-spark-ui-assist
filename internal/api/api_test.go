@@ -214,22 +214,25 @@ func TestReconcileSetsNoCacheHeader(t *testing.T) {
 	}
 }
 
-// TestReconcilePassesActiveDriversToReconciler verifies that the active drivers
-// from the store are forwarded to the reconciler.
-func TestReconcilePassesActiveDriversToReconciler(t *testing.T) {
+// TestReconcilePassesOnlyRunningDriversToReconciler verifies that only Running
+// drivers from the store are forwarded to the reconciler. Pending/Unknown
+// drivers must not receive an HTTPRoute.
+func TestReconcilePassesOnlyRunningDriversToReconciler(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
 	s := store.New()
-	s.Add(store.Driver{PodName: "driver-1", AppSelector: "spark-abc", AppName: "job"})
+	s.Add(store.Driver{PodName: "driver-running", AppSelector: "spark-abc", AppName: "job", State: store.StateRunning})
+	s.Add(store.Driver{PodName: "driver-pending", AppSelector: "spark-xyz", AppName: "job", State: store.StatePending})
 
-	var gotDrivers []store.Driver
 	rec := &captureReconciler{}
 	h := newHandler(client, s, rec)
 
 	get(h, "/proxy/api/reconcile")
 
-	gotDrivers = rec.drivers
-	if len(gotDrivers) != 1 || gotDrivers[0].AppSelector != "spark-abc" {
-		t.Errorf("expected reconciler called with spark-abc driver, got %v", gotDrivers)
+	if len(rec.drivers) != 1 {
+		t.Fatalf("expected 1 driver forwarded to reconciler, got %d: %v", len(rec.drivers), rec.drivers)
+	}
+	if rec.drivers[0].AppSelector != "spark-abc" {
+		t.Errorf("expected running driver spark-abc to be forwarded, got %v", rec.drivers)
 	}
 }
 

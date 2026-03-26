@@ -10,6 +10,22 @@ import (
 	"time"
 )
 
+// DriverState represents the lifecycle phase of a Spark driver pod as observed
+// by the watcher. It mirrors the Kubernetes pod phase for non-terminated pods.
+type DriverState string
+
+const (
+	// StatePending means the pod has been accepted by Kubernetes but the
+	// container is not yet running (scheduling, image pull, init containers, etc.).
+	StatePending DriverState = "Pending"
+	// StateRunning means the pod has been bound to a node and the container
+	// is running. Only Running drivers get an HTTPRoute.
+	StateRunning DriverState = "Running"
+	// StateUnknown means the pod phase could not be determined (e.g. the node
+	// is unreachable). The pod is tracked in the store but no HTTPRoute is created.
+	StateUnknown DriverState = "Unknown"
+)
+
 // Driver holds the metadata we track for a single Spark driver pod.
 type Driver struct {
 	// PodName is the Kubernetes pod name, used as the map key.
@@ -20,6 +36,9 @@ type Driver struct {
 	AppSelector string
 	// AppName is the value of the spark-app-name label.
 	AppName string
+	// State is the current lifecycle phase of the driver pod as observed by
+	// the watcher. Only StateRunning drivers have an HTTPRoute.
+	State DriverState
 }
 
 // invalidDNSChars matches any character that is not allowed in a DNS-1123 label.
@@ -84,6 +103,21 @@ func (s *Store) List() []Driver {
 	out := make([]Driver, 0, len(s.drivers))
 	for _, d := range s.drivers {
 		out = append(out, d)
+	}
+	s.mu.RUnlock()
+	return out
+}
+
+// ListRunning returns a snapshot of drivers whose State is StateRunning.
+// Only Running drivers have an HTTPRoute; use this when passing the list to
+// the HTTPRoute reconciler.
+func (s *Store) ListRunning() []Driver {
+	s.mu.RLock()
+	out := make([]Driver, 0, len(s.drivers))
+	for _, d := range s.drivers {
+		if d.State == StateRunning {
+			out = append(out, d)
+		}
 	}
 	s.mu.RUnlock()
 	return out

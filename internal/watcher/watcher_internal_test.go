@@ -1,8 +1,8 @@
 // White-box tests for unexported watcher helpers.
 // Being in package watcher (not watcher_test) gives access to the private
-// functions isSparkDriver, isTerminated, and driverFromPod, and lets us
-// exercise the cache.DeletedFinalStateUnknown tombstone path in DeleteFunc
-// without needing a real informer.
+// functions isSparkDriver, isTerminated, stateFromPodPhase, and driverFromPod,
+// and lets us exercise the cache.DeletedFinalStateUnknown tombstone path in
+// DeleteFunc without needing a real informer.
 package watcher
 
 import (
@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/unaiur/k8s-spark-ui-assist/internal/labels"
+	"github.com/unaiur/k8s-spark-ui-assist/internal/store"
 )
 
 // ---- isSparkDriver ----------------------------------------------------------
@@ -90,6 +91,40 @@ func TestIsTerminatedNoPhase(t *testing.T) {
 	}
 }
 
+// ---- stateFromPodPhase ------------------------------------------------------
+
+func TestStateFromPodPhaseRunning(t *testing.T) {
+	if got := stateFromPodPhase("Running"); got != store.StateRunning {
+		t.Errorf("got %q, want %q", got, store.StateRunning)
+	}
+}
+
+func TestStateFromPodPhasePending(t *testing.T) {
+	if got := stateFromPodPhase("Pending"); got != store.StatePending {
+		t.Errorf("got %q, want %q", got, store.StatePending)
+	}
+}
+
+func TestStateFromPodPhaseEmpty(t *testing.T) {
+	// Empty phase (pod just admitted, no status yet) is treated as Pending.
+	if got := stateFromPodPhase(""); got != store.StatePending {
+		t.Errorf("got %q, want %q", got, store.StatePending)
+	}
+}
+
+func TestStateFromPodPhaseUnknown(t *testing.T) {
+	if got := stateFromPodPhase("Unknown"); got != store.StateUnknown {
+		t.Errorf("got %q, want %q", got, store.StateUnknown)
+	}
+}
+
+func TestStateFromPodPhaseUnrecognised(t *testing.T) {
+	// Any unrecognised phase maps to StateUnknown.
+	if got := stateFromPodPhase("SomeFuturePhase"); got != store.StateUnknown {
+		t.Errorf("got %q, want %q", got, store.StateUnknown)
+	}
+}
+
 // ---- driverFromPod ----------------------------------------------------------
 
 func TestDriverFromPod(t *testing.T) {
@@ -101,6 +136,7 @@ func TestDriverFromPod(t *testing.T) {
 		labels.LabelSelector: "spark-abc",
 		labels.LabelAppName:  "my-app",
 	})
+	_ = unstructured.SetNestedField(pod.Object, "Running", "status", "phase")
 
 	d := driverFromPod(pod)
 
@@ -115,6 +151,20 @@ func TestDriverFromPod(t *testing.T) {
 	}
 	if !d.CreatedAt.Equal(ts) {
 		t.Errorf("CreatedAt: got %v, want %v", d.CreatedAt, ts)
+	}
+	if d.State != store.StateRunning {
+		t.Errorf("State: got %q, want %q", d.State, store.StateRunning)
+	}
+}
+
+func TestDriverFromPodPendingState(t *testing.T) {
+	pod := &unstructured.Unstructured{Object: map[string]interface{}{}}
+	pod.SetName("my-pod")
+	_ = unstructured.SetNestedField(pod.Object, "Pending", "status", "phase")
+
+	d := driverFromPod(pod)
+	if d.State != store.StatePending {
+		t.Errorf("State: got %q, want %q", d.State, store.StatePending)
 	}
 }
 

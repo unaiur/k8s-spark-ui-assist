@@ -45,14 +45,75 @@ func newStore(drivers ...store.Driver) *store.Store {
 
 func fixedNow() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
-// TestHandlerDashboardServesPage checks that GET "/proxy/" returns 200 and the
-// driver list with links using the /proxy/ prefix.
+// TestHandlerDashboardRunningDriver checks that a Running driver gets a link
+// and a green badge.
+func TestHandlerDashboardRunningDriver(t *testing.T) {
+	s := newStore(store.Driver{
+		PodName:     "pod-1",
+		AppSelector: "spark-abc",
+		AppName:     "my-job",
+		CreatedAt:   fixedNow().Add(-time.Hour),
+		State:       store.StateRunning,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/proxy/", nil)
+	rec := httptest.NewRecorder()
+	Handler(s, fixedNow).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "/proxy/spark-abc/jobs/") {
+		t.Errorf("expected driver link with /proxy/ prefix in body, got:\n%s", body)
+	}
+	if !strings.Contains(body, "badge-running") {
+		t.Errorf("expected badge-running class in body, got:\n%s", body)
+	}
+	if !strings.Contains(body, "Running") {
+		t.Errorf("expected Running state text in body, got:\n%s", body)
+	}
+}
+
+// TestHandlerDashboardPendingDriver checks that a Pending driver shows no link
+// and a grey badge.
+func TestHandlerDashboardPendingDriver(t *testing.T) {
+	s := newStore(store.Driver{
+		PodName:     "pod-2",
+		AppSelector: "spark-xyz",
+		AppName:     "my-pending-job",
+		CreatedAt:   fixedNow().Add(-time.Minute),
+		State:       store.StatePending,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/proxy/", nil)
+	rec := httptest.NewRecorder()
+	Handler(s, fixedNow).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "/proxy/spark-xyz/jobs/") {
+		t.Errorf("pending driver should NOT have a link, got:\n%s", body)
+	}
+	if !strings.Contains(body, "badge-pending") {
+		t.Errorf("expected badge-pending class in body, got:\n%s", body)
+	}
+	if !strings.Contains(body, "Pending") {
+		t.Errorf("expected Pending state text in body, got:\n%s", body)
+	}
+}
+
+// TestHandlerDashboardServesPage is the legacy smoke-test: GET "/proxy/" with a
+// Running driver returns 200 and the driver link.
 func TestHandlerDashboardServesPage(t *testing.T) {
 	s := newStore(store.Driver{
 		PodName:     "pod-1",
 		AppSelector: "spark-abc",
 		AppName:     "my-job",
 		CreatedAt:   fixedNow().Add(-time.Hour),
+		State:       store.StateRunning,
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/", nil)

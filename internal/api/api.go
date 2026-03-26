@@ -111,7 +111,7 @@ func handleReconcile(w http.ResponseWriter, r *http.Request, s *store.Store, rec
 		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "httproute management not configured"})
 		return
 	}
-	if err := rec.Reconcile(r.Context(), s.List()); err != nil {
+	if err := rec.Reconcile(r.Context(), s.ListRunning()); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
