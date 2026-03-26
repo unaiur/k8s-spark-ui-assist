@@ -56,7 +56,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/proxy/api/", api.Handler(s, mgr))
-	mux.Handle("/", server.Handler(s, time.Now))
+	mux.Handle("/", server.Handler(s, time.Now, mgr))
 
 	srv := &http.Server{
 		Addr:    ":8080",

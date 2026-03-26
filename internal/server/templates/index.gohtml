@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Spark UIs</title>
+<style>
+  body { font-family: sans-serif; margin: 2em; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #ddd; }
+  th { background: #f4f4f4; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.85em;
+    font-weight: bold;
+    color: #fff;
+  }
+  .badge-running       { background: #2e7d32; }
+  .badge-pending       { background: #757575; }
+  .badge-unknown       { background: #e65100; }
+  .badge-succeeded     { background: #1565c0; }
+  .badge-failed        { background: #b71c1c; }
+</style>
+</head>
+<body>
+<h1>Spark Jobs</h1>
+<table>
+  <thead>
+    <tr><th>Job</th><th>State</th><th>Age</th></tr>
+  </thead>
+  <tbody>
+  {{- range .}}
+  <tr>
+    <td>{{if .URL}}<a href="{{.URL}}">{{.AppName}}</a>{{else}}{{.AppName}}{{end}}</td>
+    <td><span class="badge badge-{{.StateClass}}"{{if .Reason}} title="{{.Reason}}"{{end}}>{{.State}}</span></td>
+    <td>{{.Duration}}</td>
+  </tr>
+  {{- end}}
+  </tbody>
+</table>
+</body>
+</html>

@@ -2,59 +2,35 @@
 package server
 
 import (
+	"context"
+	_ "embed"
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
 	"sort"
+	"strings"
 	"time"
+
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/unaiur/k8s-spark-ui-assist/internal/store"
 )
 
-var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Spark UIs</title>
-<style>
-  body { font-family: sans-serif; margin: 2em; }
-  table { border-collapse: collapse; width: 100%; }
-  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #ddd; }
-  th { background: #f4f4f4; }
-  .badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 0.85em;
-    font-weight: bold;
-    color: #fff;
-  }
-  .badge-running       { background: #2e7d32; }
-  .badge-pending       { background: #757575; }
-  .badge-unknown       { background: #e65100; }
-  .badge-succeeded     { background: #1565c0; }
-  .badge-failed        { background: #b71c1c; }
-</style>
-</head>
-<body>
-<h1>Spark Jobs</h1>
-<table>
-  <thead>
-    <tr><th>Job</th><th>State</th><th>Age</th></tr>
-  </thead>
-  <tbody>
-  {{- range .}}
-  <tr>
-    <td>{{if .URL}}<a href="{{.URL}}">{{.AppName}}</a>{{else}}{{.AppName}}{{end}}</td>
-    <td><span class="badge badge-{{.StateClass}}"{{if .Reason}} title="{{.Reason}}"{{end}}>{{.State}}</span></td>
-    <td>{{.Duration}}</td>
-  </tr>
-  {{- end}}
-  </tbody>
-</table>
-</body>
-</html>
-`))
+// Ensurer is implemented by httproute.Manager. Defined as an interface here so
+// the server package does not import httproute.
+type Ensurer interface {
+	Ensure(ctx context.Context, d store.Driver)
+}
+
+//go:embed templates/index.gohtml
+var indexTmplSrc string
+
+//go:embed templates/status.gohtml
+var statusTmplSrc string
+
+var indexTmpl = template.Must(template.New("index").Parse(indexTmplSrc))
+var statusTmpl = template.Must(template.New("status").Parse(statusTmplSrc))
 
 // driverPathPrefix is the fixed URL path prefix for per-driver links.
 // Spark UI requires this exact value to resolve its internal asset paths correctly.
@@ -69,53 +45,164 @@ type driverView struct {
 	Duration   string
 }
 
+type statusView struct {
+	AppName        string
+	Message        string
+	HistoryURL     string
+	RefreshSeconds int
+}
+
 // dashboardPath is the canonical URL path for the dashboard page.
-// All other paths redirect here.
 const dashboardPath = driverPathPrefix
 
-// Handler returns an http.Handler that serves the Spark driver list.
-// The dashboard is served at /proxy/ (the fixed driverPathPrefix), which is
-// treated as the canonical URL for the dashboard. Any request whose path is
-// not exactly "/proxy/" is redirected there with a 302 to keep a single,
-// stable entry point regardless of how the gateway routes traffic to this handler.
-func Handler(s *store.Store, now func() time.Time) http.Handler {
+// Handler returns an http.Handler that serves the Spark driver list dashboard
+// and per-app status pages.
+//
+// Request routing:
+//   - GET /proxy/            → dashboard (list of all drivers)
+//   - GET /proxy/<appID>/…   → status page for that app (HTTPRoute is absent)
+//   - anything else          → 302 redirect to /proxy/
+//
+// The ensurer is used on the status page when a Running driver is found but its
+// HTTPRoute is missing; passing nil disables that recovery path.
+func Handler(s *store.Store, now func() time.Time, ensurer Ensurer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != dashboardPath {
-			http.Redirect(w, r, dashboardPath, http.StatusFound)
+		path := r.URL.Path
+
+		// Exact dashboard path.
+		if path == dashboardPath {
+			serveDashboard(w, r, s, now)
 			return
 		}
 
-		drivers := s.List()
-		// Sort by creation time for stable output.
-		sort.Slice(drivers, func(i, j int) bool {
-			return drivers[i].CreatedAt.Before(drivers[j].CreatedAt)
-		})
-
-		current := now()
-		views := make([]driverView, 0, len(drivers))
-		for _, d := range drivers {
-			var url template.URL
-			switch d.State {
-			case store.StateRunning:
-				url = template.URL(driverPathPrefix + d.AppSelector + "/jobs/")
-			case store.StateSucceeded, store.StateFailed:
-				url = template.URL("/history/" + d.AppSelector + "/jobs/")
+		// /proxy/<appID> or /proxy/<appID>/... — status page for that app.
+		if strings.HasPrefix(path, driverPathPrefix) {
+			rest := strings.TrimPrefix(path, driverPathPrefix)
+			// rest is "<appID>" or "<appID>/..."
+			appID := rest
+			if idx := strings.Index(rest, "/"); idx >= 0 {
+				appID = rest[:idx]
 			}
-			views = append(views, driverView{
-				URL:        url,
-				AppName:    d.AppName,
-				State:      d.State,
-				StateClass: stateClass(d.State),
-				Reason:     d.Reason,
-				Duration:   FormatDuration(current.Sub(d.CreatedAt)),
-			})
+			if appID != "" {
+				serveProxyStatus(w, r, s, ensurer, appID)
+				return
+			}
 		}
 
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := indexTmpl.Execute(w, views); err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-		}
+		http.Redirect(w, r, dashboardPath, http.StatusFound)
 	})
+}
+
+// serveDashboard renders the driver list.
+func serveDashboard(w http.ResponseWriter, r *http.Request, s *store.Store, now func() time.Time) {
+	drivers := s.List()
+	sort.Slice(drivers, func(i, j int) bool {
+		return drivers[i].CreatedAt.Before(drivers[j].CreatedAt)
+	})
+
+	current := now()
+	views := make([]driverView, 0, len(drivers))
+	for _, d := range drivers {
+		var url template.URL
+		switch d.State {
+		case store.StateRunning:
+			url = template.URL(driverPathPrefix + d.AppSelector + "/jobs/")
+		case store.StatePending:
+			// Link to status page so users can see why the job isn't running yet.
+			url = template.URL(driverPathPrefix + d.AppSelector + "/")
+		case store.StateSucceeded, store.StateFailed:
+			url = template.URL("/history/" + d.AppSelector + "/jobs/")
+		}
+		views = append(views, driverView{
+			URL:        url,
+			AppName:    d.AppName,
+			State:      d.State,
+			StateClass: stateClass(d.State),
+			Reason:     d.Reason,
+			Duration:   FormatDuration(current.Sub(d.CreatedAt)),
+		})
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := indexTmpl.Execute(w, views); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
+}
+
+// serveProxyStatus handles a request that arrived at /proxy/<appID>/… — meaning
+// the HTTPRoute for appID is absent (otherwise the gateway would have proxied
+// the request to the Spark UI directly). We look up the driver in the store and
+// show a contextual message.
+func serveProxyStatus(w http.ResponseWriter, r *http.Request, s *store.Store, ensurer Ensurer, appID string) {
+	// Validate appID as a Kubernetes label value before using it in URLs or
+	// store lookups; this prevents XSS/injection via a crafted path segment.
+	if errs := validation.IsValidLabelValue(appID); len(errs) > 0 {
+		http.Error(w, "invalid app ID", http.StatusBadRequest)
+		return
+	}
+
+	historyURL := "/history/" + url.PathEscape(appID) + "/jobs/"
+
+	d, found := s.FindBySelector(appID)
+
+	var view statusView
+	switch {
+	case !found:
+		view = statusView{
+			AppName: appID,
+			Message: "No driver pod found for this Spark job in Kubernetes. " +
+				"The job may have completed and been purged.",
+			HistoryURL: historyURL,
+		}
+
+	case d.State == store.StatePending:
+		msg := "The Spark job is starting up and is not yet running."
+		if d.Reason != "" {
+			msg = "The Spark job is starting up: " + d.Reason + "."
+		}
+		view = statusView{
+			AppName:        d.AppName,
+			Message:        msg,
+			RefreshSeconds: 10,
+		}
+
+	case d.State == store.StateRunning:
+		// HTTPRoute is missing despite the pod being Running — trigger Ensure and
+		// ask the browser to retry shortly.
+		if ensurer != nil {
+			ensurer.Ensure(r.Context(), d)
+		}
+		view = statusView{
+			AppName:        d.AppName,
+			Message:        "The Spark job is running and the connection is being configured.",
+			RefreshSeconds: 5,
+		}
+
+	case d.State == store.StateFailed:
+		view = statusView{
+			AppName:    d.AppName,
+			Message:    "The Spark job has failed.",
+			HistoryURL: historyURL,
+		}
+
+	case d.State == store.StateSucceeded:
+		view = statusView{
+			AppName:    d.AppName,
+			Message:    "The Spark job has completed successfully.",
+			HistoryURL: historyURL,
+		}
+
+	default:
+		view = statusView{
+			AppName: d.AppName,
+			Message: "The Spark job state is unknown.",
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := statusTmpl.Execute(w, view); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
 }
 
 // stateClass returns the CSS class suffix used to colour the state badge.

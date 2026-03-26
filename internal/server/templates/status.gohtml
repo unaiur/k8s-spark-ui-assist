@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Spark Job Status</title>
+{{- if .RefreshSeconds}}
+<meta http-equiv="refresh" content="{{.RefreshSeconds}}">
+{{- end}}
+<style>
+  body { font-family: sans-serif; margin: 2em; }
+  .message { font-size: 1.1em; margin: 1em 0; }
+  a { color: #1565c0; }
+</style>
+</head>
+<body>
+<h1>Spark Job: {{.AppName}}</h1>
+<p class="message">{{.Message}}</p>
+{{- if .HistoryURL}}
+<p><a href="{{.HistoryURL}}">View in Spark History Server</a></p>
+{{- end}}
+{{- if .RefreshSeconds}}
+<p>This page will refresh in {{.RefreshSeconds}} seconds.</p>
+{{- end}}
+<p><a href="/proxy/">Back to dashboard</a></p>
+</body>
+</html>
