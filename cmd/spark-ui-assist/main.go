@@ -53,7 +53,7 @@ func main() {
 	go watcher.Watch(ctx, lw, s, routeHandler, onSynced)
 
 	mux := http.NewServeMux()
-	mux.Handle("/proxy/api/", api.Handler(dynClient, cfg.Namespace))
+	mux.Handle("/proxy/api/state/", api.Handler(dynClient, cfg.Namespace))
 	mux.Handle("/", server.Handler(s, time.Now))
 
 	srv := &http.Server{

@@ -2,7 +2,7 @@
 //
 // Currently provided endpoints:
 //
-//	GET /proxy/api/{appID}
+//	GET /proxy/api/state/{appID}
 //	  Returns a JSON object describing the state of the Spark driver pod
 //	  identified by the spark-app-selector={appID} label.  The same label
 //	  selector used by the watcher is applied so that only genuine Spark driver
@@ -31,8 +31,8 @@ import (
 	"github.com/unaiur/k8s-spark-ui-assist/internal/labels"
 )
 
-// apiPrefix is the URL path prefix under which all API endpoints are mounted.
-const apiPrefix = "/proxy/api/"
+// statePrefix is the URL path prefix for the state endpoint.
+const statePrefix = "/proxy/api/state/"
 
 var podGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
 
@@ -40,8 +40,8 @@ var podGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "po
 // namespace is the Kubernetes namespace to query for driver pods.
 func Handler(client dynamic.Interface, namespace string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Extract the appID from the path: /proxy/api/{appID}
-		appID := strings.TrimPrefix(r.URL.Path, apiPrefix)
+		// Extract the appID from the path: /proxy/api/state/{appID}
+		appID := strings.TrimPrefix(r.URL.Path, statePrefix)
 		// Reject empty appID or nested paths (e.g. /proxy/api/foo/bar).
 		if appID == "" || strings.Contains(appID, "/") {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
