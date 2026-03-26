@@ -2,6 +2,7 @@ package watcher_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -84,13 +85,68 @@ func nonDriverPod(name string) *unstructured.Unstructured {
 }
 
 // recordingHandler records OnAdd / OnRemove calls for assertion.
+// All fields are protected by mu because the watcher goroutine writes them
+// while the test goroutine reads them (detected by -race).
 type recordingHandler struct {
+	mu      sync.Mutex
 	added   []store.Driver
 	removed []string
 }
 
-func (h *recordingHandler) OnAdd(d store.Driver)        { h.added = append(h.added, d) }
-func (h *recordingHandler) OnRemove(appSelector string) { h.removed = append(h.removed, appSelector) }
+func (h *recordingHandler) OnAdd(d store.Driver) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.added = append(h.added, d)
+}
+
+func (h *recordingHandler) OnRemove(appSelector string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.removed = append(h.removed, appSelector)
+}
+
+// numAdded returns the number of OnAdd calls recorded so far (thread-safe).
+func (h *recordingHandler) numAdded() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.added)
+}
+
+// numRemoved returns the number of OnRemove calls recorded so far (thread-safe).
+func (h *recordingHandler) numRemoved() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.removed)
+}
+
+// lastRemoved returns the last appSelector passed to OnRemove (thread-safe).
+// Returns "" if no removals have been recorded.
+func (h *recordingHandler) lastRemoved() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.removed) == 0 {
+		return ""
+	}
+	return h.removed[len(h.removed)-1]
+}
+
+// addedSnapshot returns a copy of the added slice (thread-safe).
+func (h *recordingHandler) addedSnapshot() []store.Driver {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]store.Driver, len(h.added))
+	copy(out, h.added)
+	return out
+}
+
+// removedSnapshot returns a copy of the removed slice (thread-safe).
+func (h *recordingHandler) removedSnapshot() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]string, len(h.removed))
+	copy(out, h.removed)
+	return out
+}
 
 // runWatch starts Watch with the given pre-created pods and waits until the
 // informer has synced before cancelling. Returns the store and handler.
@@ -177,8 +233,8 @@ func TestWatchAddsDriverToStore(t *testing.T) {
 	if drivers[0].AppSelector != "spark-abc" {
 		t.Errorf("expected AppSelector spark-abc, got %q", drivers[0].AppSelector)
 	}
-	if len(h.added) != 1 || h.added[0].PodName != "driver-1" {
-		t.Errorf("expected OnAdd called once with driver-1, got %v", h.added)
+	if added := h.addedSnapshot(); len(added) != 1 || added[0].PodName != "driver-1" {
+		t.Errorf("expected OnAdd called once with driver-1, got %v", h.addedSnapshot())
 	}
 }
 
@@ -190,8 +246,8 @@ func TestWatchIgnoresNonDriverPods(t *testing.T) {
 	if drivers := s.List(); len(drivers) != 0 {
 		t.Errorf("expected empty store, got %d drivers", len(drivers))
 	}
-	if len(h.added) != 0 {
-		t.Errorf("expected no OnAdd calls, got %d", len(h.added))
+	if h.numAdded() != 0 {
+		t.Errorf("expected no OnAdd calls, got %d", h.numAdded())
 	}
 }
 
@@ -203,8 +259,8 @@ func TestWatchIgnoresTerminatedPodsOnAdd(t *testing.T) {
 	if drivers := s.List(); len(drivers) != 0 {
 		t.Errorf("expected empty store for terminated pod, got %d drivers", len(drivers))
 	}
-	if len(h.added) != 0 {
-		t.Errorf("expected no OnAdd calls for terminated pod, got %d", len(h.added))
+	if h.numAdded() != 0 {
+		t.Errorf("expected no OnAdd calls for terminated pod, got %d", h.numAdded())
 	}
 }
 
@@ -215,8 +271,8 @@ func TestWatchIgnoresFailedPodsOnAdd(t *testing.T) {
 	if drivers := s.List(); len(drivers) != 0 {
 		t.Errorf("expected empty store for failed pod, got %d", len(drivers))
 	}
-	if len(h.added) != 0 {
-		t.Errorf("expected no OnAdd calls for failed pod, got %d", len(h.added))
+	if h.numAdded() != 0 {
+		t.Errorf("expected no OnAdd calls for failed pod, got %d", h.numAdded())
 	}
 }
 
@@ -231,7 +287,7 @@ func TestWatchMultipleDrivers(t *testing.T) {
 	if got := len(s.List()); got != 2 {
 		t.Errorf("expected 2 drivers in store, got %d", got)
 	}
-	if got := len(h.added); got != 2 {
+	if got := h.numAdded(); got != 2 {
 		t.Errorf("expected 2 OnAdd calls, got %d", got)
 	}
 }
@@ -290,8 +346,8 @@ func TestWatchUpdateTerminatesDriver(t *testing.T) {
 	if got := len(s.List()); got != 0 {
 		t.Errorf("expected driver removed from store after termination, got %d", got)
 	}
-	if len(h.removed) == 0 || h.removed[len(h.removed)-1] != "spark-abc" {
-		t.Errorf("expected OnRemove(spark-abc), got %v", h.removed)
+	if h.numRemoved() == 0 || h.lastRemoved() != "spark-abc" {
+		t.Errorf("expected OnRemove(spark-abc), got %v", h.removedSnapshot())
 	}
 }
 
@@ -321,7 +377,7 @@ func TestWatchUpdateRunningDriverUpserts(t *testing.T) {
 		t.Fatal("timed out waiting for sync")
 	}
 
-	addedBefore := len(h.added)
+	addedBefore := h.numAdded()
 
 	// Touch the pod (still running — no phase change).
 	updated := pod.DeepCopy()
@@ -334,14 +390,14 @@ func TestWatchUpdateRunningDriverUpserts(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(h.added) > addedBefore {
+		if h.numAdded() > addedBefore {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if len(h.added) <= addedBefore {
-		t.Errorf("expected additional OnAdd after update, added=%v", h.added)
+	if h.numAdded() <= addedBefore {
+		t.Errorf("expected additional OnAdd after update, added=%v", h.addedSnapshot())
 	}
 	if got := len(s.List()); got != 1 {
 		t.Errorf("expected driver still in store, got %d", got)
@@ -393,8 +449,8 @@ func TestWatchDeleteRemovesDriver(t *testing.T) {
 	if got := len(s.List()); got != 0 {
 		t.Errorf("expected driver removed from store after delete, got %d", got)
 	}
-	if len(h.removed) == 0 || h.removed[len(h.removed)-1] != "spark-abc" {
-		t.Errorf("expected OnRemove(spark-abc), got %v", h.removed)
+	if h.numRemoved() == 0 || h.lastRemoved() != "spark-abc" {
+		t.Errorf("expected OnRemove(spark-abc), got %v", h.removedSnapshot())
 	}
 }
 
@@ -440,8 +496,8 @@ func TestWatchDeleteNonDriverIsNoop(t *testing.T) {
 		t.Errorf("expected driver still in store after non-driver delete, got %d", got)
 	}
 	// OnRemove should never have been called.
-	if len(h.removed) != 0 {
-		t.Errorf("expected no OnRemove calls, got %v", h.removed)
+	if h.numRemoved() != 0 {
+		t.Errorf("expected no OnRemove calls, got %v", h.removedSnapshot())
 	}
 }
 
