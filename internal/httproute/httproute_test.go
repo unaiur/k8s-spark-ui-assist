@@ -169,7 +169,9 @@ func TestReconcileRemovesStaleRoutes(t *testing.T) {
 	mgr.Ensure(ctx, newDriver("spark-old1", "job-old1"))
 	mgr.Ensure(ctx, newDriver("spark-old2", "job-old2"))
 
-	mgr.Reconcile(ctx, []store.Driver{newDriver("spark-old2", "job-old2")})
+	if err := mgr.Reconcile(ctx, []store.Driver{newDriver("spark-old2", "job-old2")}); err != nil {
+		t.Fatalf("Reconcile returned unexpected error: %v", err)
+	}
 
 	routes := listRoutes(t, client)
 	if len(routes) != 1 {
@@ -189,10 +191,12 @@ func TestReconcileCreatesMissingRoutes(t *testing.T) {
 
 	mgr.Ensure(ctx, newDriver("spark-aaa", "job-a"))
 
-	mgr.Reconcile(ctx, []store.Driver{
+	if err := mgr.Reconcile(ctx, []store.Driver{
 		newDriver("spark-aaa", "job-a"),
 		newDriver("spark-bbb", "job-b"),
-	})
+	}); err != nil {
+		t.Fatalf("Reconcile returned unexpected error: %v", err)
+	}
 
 	if !routeExists(t, client, "spark-aaa-ui-route") {
 		t.Error("expected spark-aaa-ui-route to still exist")
@@ -213,7 +217,9 @@ func TestReconcileNoopWhenUpToDate(t *testing.T) {
 	mgr.Ensure(ctx, d)
 
 	actionsBefore := len(client.Actions())
-	mgr.Reconcile(ctx, []store.Driver{d})
+	if err := mgr.Reconcile(ctx, []store.Driver{d}); err != nil {
+		t.Fatalf("Reconcile returned unexpected error: %v", err)
+	}
 
 	for _, a := range client.Actions()[actionsBefore:] {
 		if a.GetVerb() == "create" || a.GetVerb() == "delete" {
