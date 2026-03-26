@@ -51,12 +51,14 @@ func main() {
 
 	onSynced := func() {
 		log.Printf("httproute: informer synced, reconciling routes")
-		mgr.Reconcile(ctx, s.List())
+		if err := mgr.Reconcile(ctx, s.List()); err != nil {
+			log.Printf("httproute: initial reconcile failed: %v", err)
+		}
 	}
 	go watcher.Watch(ctx, lw, s, routeHandler, onSynced)
 
 	mux := http.NewServeMux()
-	mux.Handle("/proxy/api/state/", api.Handler(svc))
+	mux.Handle("/proxy/api/", api.Handler(svc, s, mgr))
 	mux.Handle("/", server.Handler(s, time.Now))
 
 	srv := &http.Server{

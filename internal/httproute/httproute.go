@@ -77,7 +77,8 @@ func (m *Manager) Delete(ctx context.Context, appSelector string) {
 // list of currently active drivers. It deletes routes for drivers that are no
 // longer active and creates routes for drivers that are missing one.
 // Call this once after the pod informer has fully synced.
-func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) {
+// Returns the first error encountered, if any; all routes are still attempted.
+func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) error {
 	// Build a set of expected route names.
 	wantedByName := make(map[string]store.Driver, len(active))
 	for _, d := range active {
@@ -88,9 +89,10 @@ func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) {
 	items, err := m.svc.ListRoutesWithLabelSelector(k8ssvc.ManagedBySelector())
 	if err != nil {
 		log.Printf("httproute: reconcile: failed to list managed HTTPRoutes: %v", err)
-		return
+		return err
 	}
 
+	var firstErr error
 	presentNames := make(map[string]bool, len(items))
 	for _, item := range items {
 		name := item.GetName()
@@ -99,6 +101,9 @@ func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) {
 			log.Printf("httproute: reconcile: deleting stale HTTPRoute %s", name)
 			if delErr := m.svc.DeleteRoute(name); delErr != nil && !errors.IsNotFound(delErr) {
 				log.Printf("httproute: reconcile: failed to delete %s: %v", name, delErr)
+				if firstErr == nil {
+					firstErr = delErr
+				}
 			}
 		}
 	}
@@ -110,6 +115,10 @@ func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) {
 		log.Printf("httproute: reconcile: creating missing HTTPRoute %s", name)
 		if createErr := m.svc.CreateDriverRoute(d, m.cfg); createErr != nil && !errors.IsAlreadyExists(createErr) {
 			log.Printf("httproute: reconcile: failed to create %s: %v", name, createErr)
+			if firstErr == nil {
+				firstErr = createErr
+			}
 		}
 	}
+	return firstErr
 }
