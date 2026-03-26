@@ -9,11 +9,10 @@
 //	  pods are matched.
 //
 //	  Responses:
-//	    200  {"appID":"…","state":"…"}
+//	    200  {"appID":"…","state":"…","reason":"…"}
 //	    400  {"error":"invalid appID"}           – appID is not a valid label value
 //	    404  {"error":"driver not found"}        – no matching pod
 //	    405  {"error":"method not allowed"}      – non-GET request
-//	    500  {"error":"…"}                       – Kubernetes API error
 //
 //	GET /proxy/api/reconcile
 //	  Triggers an immediate HTTPRoute reconciliation against the current set of
@@ -36,7 +35,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/validation"
 
-	k8ssvc "github.com/unaiur/k8s-spark-ui-assist/internal/k8s"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/store"
 )
 
@@ -53,22 +51,22 @@ const statePrefix = "/proxy/api/state/"
 const reconcilePath = "/proxy/api/reconcile"
 
 // Handler returns an http.Handler that serves all /proxy/api/ endpoints.
-// svc is used to query Kubernetes for driver pod state.
-// s is the driver store used to supply the active driver list to Reconcile.
+// s is the driver store used for state lookups and to supply the active driver
+// list to Reconcile.
 // rec is the HTTPRoute reconciler; if nil the /proxy/api/reconcile endpoint
 // returns 501 Not Implemented.
-func Handler(svc *k8ssvc.KubernetesSvc, s *store.Store, rec Reconciler) http.Handler {
+func Handler(s *store.Store, rec Reconciler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == reconcilePath {
 			handleReconcile(w, r, s, rec)
 			return
 		}
-		handleState(w, r, svc)
+		handleState(w, r, s)
 	})
 }
 
 // handleState serves GET /proxy/api/state/{appID}.
-func handleState(w http.ResponseWriter, r *http.Request, svc *k8ssvc.KubernetesSvc) {
+func handleState(w http.ResponseWriter, r *http.Request, s *store.Store) {
 	appID := strings.TrimPrefix(r.URL.Path, statePrefix)
 	// Reject empty appID or nested paths (e.g. /proxy/api/foo/bar).
 	if appID == "" || strings.Contains(appID, "/") {
@@ -88,17 +86,13 @@ func handleState(w http.ResponseWriter, r *http.Request, svc *k8ssvc.KubernetesS
 		return
 	}
 
-	state, err := svc.SparkDriverState(appID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if state == "" {
+	d, ok := s.FindBySelector(appID)
+	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "driver not found"})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"appID": appID, "state": state})
+	writeJSON(w, http.StatusOK, map[string]string{"appID": appID, "state": string(d.State), "reason": d.Reason})
 }
 
 // handleReconcile serves GET /proxy/api/reconcile.

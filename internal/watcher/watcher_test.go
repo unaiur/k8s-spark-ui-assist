@@ -12,7 +12,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 
-	"github.com/unaiur/k8s-spark-ui-assist/internal/labels"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/store"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/watcher"
 )
@@ -40,10 +39,10 @@ func driverPod(name, appID string) *unstructured.Unstructured {
 				"name":      name,
 				"namespace": "default",
 				"labels": map[string]interface{}{
-					labels.LabelInstance: labels.InstanceValue,
-					labels.LabelRole:     labels.RoleValue,
-					labels.LabelSelector: appID,
-					labels.LabelAppName:  "my-job",
+					"app.kubernetes.io/instance": "spark-job",
+					"spark-role":                 "driver",
+					"spark-app-selector":         appID,
+					"spark-app-name":             "my-job",
 				},
 			},
 			"status": map[string]interface{}{},
@@ -93,7 +92,7 @@ func nonDriverPod(name string) *unstructured.Unstructured {
 				"name":      name,
 				"namespace": "default",
 				"labels": map[string]interface{}{
-					labels.LabelInstance: labels.InstanceValue,
+					"app.kubernetes.io/instance": "spark-job",
 					// no spark-role=driver
 				},
 			},
@@ -272,25 +271,35 @@ func TestWatchIgnoresNonDriverPods(t *testing.T) {
 	}
 }
 
-// TestWatchIgnoresTerminatedPodsOnAdd verifies that a Succeeded pod present at
-// startup is not added to the store.
-func TestWatchIgnoresTerminatedPodsOnAdd(t *testing.T) {
+// TestWatchTerminatedPodOnAddStoredWithoutOnAdd verifies that a Succeeded pod
+// present at startup is added to the store with StateSucceeded but does NOT
+// trigger OnAdd (no HTTPRoute should be created for a finished job).
+func TestWatchTerminatedPodOnAddStoredWithoutOnAdd(t *testing.T) {
 	s, h := runWatch(t, terminatedPod("driver-done", "spark-abc"))
 
-	if drivers := s.List(); len(drivers) != 0 {
-		t.Errorf("expected empty store for terminated pod, got %d drivers", len(drivers))
+	drivers := s.List()
+	if len(drivers) != 1 {
+		t.Fatalf("expected terminated pod to appear in store, got %d", len(drivers))
+	}
+	if drivers[0].State != store.StateSucceeded {
+		t.Errorf("expected State Succeeded, got %q", drivers[0].State)
 	}
 	if h.numAdded() != 0 {
 		t.Errorf("expected no OnAdd calls for terminated pod, got %d", h.numAdded())
 	}
 }
 
-// TestWatchIgnoresFailedPodsOnAdd verifies that a Failed pod is also skipped.
-func TestWatchIgnoresFailedPodsOnAdd(t *testing.T) {
+// TestWatchFailedPodOnAddStoredWithoutOnAdd verifies that a Failed pod present
+// at startup is added to the store with StateFailed but does NOT trigger OnAdd.
+func TestWatchFailedPodOnAddStoredWithoutOnAdd(t *testing.T) {
 	s, h := runWatch(t, failedPod("driver-failed", "spark-abc"))
 
-	if drivers := s.List(); len(drivers) != 0 {
-		t.Errorf("expected empty store for failed pod, got %d", len(drivers))
+	drivers := s.List()
+	if len(drivers) != 1 {
+		t.Fatalf("expected failed pod to appear in store, got %d", len(drivers))
+	}
+	if drivers[0].State != store.StateFailed {
+		t.Errorf("expected State Failed, got %q", drivers[0].State)
 	}
 	if h.numAdded() != 0 {
 		t.Errorf("expected no OnAdd calls for failed pod, got %d", h.numAdded())
@@ -316,7 +325,8 @@ func TestWatchMultipleDrivers(t *testing.T) {
 // ---- Watch: UpdateFunc ------------------------------------------------------
 
 // TestWatchUpdateTerminatesDriver verifies that updating a driver pod to
-// Succeeded removes it from the store and fires OnRemove.
+// Succeeded upserts it in the store with StateSucceeded and fires OnRemove
+// (to delete the HTTPRoute), but does NOT remove it from the store.
 func TestWatchUpdateTerminatesDriver(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
 	pod := driverPod("driver-1", "spark-abc")
@@ -355,17 +365,21 @@ func TestWatchUpdateTerminatesDriver(t *testing.T) {
 		t.Fatalf("update: %v", err)
 	}
 
-	// Give the informer time to process the update event.
+	// Wait for OnRemove to fire.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(s.List()) == 0 {
+		if h.numRemoved() > 0 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if got := len(s.List()); got != 0 {
-		t.Errorf("expected driver removed from store after termination, got %d", got)
+	// The driver must still be in the store (with StateSucceeded, not deleted).
+	drivers := s.List()
+	if len(drivers) != 1 {
+		t.Errorf("expected driver to remain in store after termination, got %d", len(drivers))
+	} else if drivers[0].State != store.StateSucceeded {
+		t.Errorf("expected State Succeeded after termination, got %q", drivers[0].State)
 	}
 	if h.numRemoved() == 0 || h.lastRemoved() != "spark-abc" {
 		t.Errorf("expected OnRemove(spark-abc), got %v", h.removedSnapshot())

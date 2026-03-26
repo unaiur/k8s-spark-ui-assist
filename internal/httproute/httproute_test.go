@@ -13,7 +13,6 @@ import (
 
 	"github.com/unaiur/k8s-spark-ui-assist/internal/config"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/httproute"
-	k8ssvc "github.com/unaiur/k8s-spark-ui-assist/internal/k8s"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/store"
 )
 
@@ -24,6 +23,13 @@ var httpRouteGVR = schema.GroupVersionResource{
 }
 
 const namespace = "default"
+
+// testCfg is a minimal HTTPRouteConfig used in route tests.
+var testCfg = config.HTTPRouteConfig{
+	Hostname:         "spark.example.com",
+	GatewayName:      "main-gateway",
+	GatewayNamespace: "gateway-ns",
+}
 
 // newScheme returns a minimal scheme that knows about HTTPRoute and HTTPRouteList.
 func newScheme() *runtime.Scheme {
@@ -45,13 +51,7 @@ func newDriver(appSelector, appName string) store.Driver {
 
 // newManager creates a Manager wired to the fake client.
 func newManager(client *dynamicfake.FakeDynamicClient) *httproute.Manager {
-	cfg := config.HTTPRouteConfig{
-		Hostname:         "spark.example.com",
-		GatewayName:      "main-gateway",
-		GatewayNamespace: "gateway-ns",
-	}
-	svc := k8ssvc.New(context.Background(), client, namespace)
-	return httproute.New(svc, cfg)
+	return httproute.New(context.Background(), client, namespace, testCfg)
 }
 
 // routeExists checks whether an HTTPRoute with the given name exists.
@@ -74,6 +74,8 @@ func listRoutes(t *testing.T, client *dynamicfake.FakeDynamicClient) []unstructu
 	}
 	return list.Items
 }
+
+// ---- Manager high-level behaviour tests -------------------------------------
 
 // TestEnsureCreatesRoute verifies that Ensure creates an HTTPRoute for a driver.
 func TestEnsureCreatesRoute(t *testing.T) {
@@ -225,5 +227,143 @@ func TestReconcileNoopWhenUpToDate(t *testing.T) {
 		if a.GetVerb() == "create" || a.GetVerb() == "delete" {
 			t.Errorf("unexpected %s action during no-op reconcile", a.GetVerb())
 		}
+	}
+}
+
+// ---- Route CRUD unit tests (previously in k8s_svc_test.go) ------------------
+
+func TestCreateAndGetRoute(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	mgr := newManager(client)
+	ctx := context.Background()
+	d := newDriver("spark-abc", "my-job")
+
+	mgr.Ensure(ctx, d)
+
+	if !routeExists(t, client, d.RouteName()) {
+		t.Fatalf("expected route %q to exist after Ensure", d.RouteName())
+	}
+}
+
+func TestGetRouteNotFound(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	_ = newManager(client)
+
+	_, err := client.Resource(httpRouteGVR).Namespace(namespace).Get(
+		context.Background(), "does-not-exist-ui-route", metav1.GetOptions{},
+	)
+	if err == nil {
+		t.Fatal("expected error for missing route, got nil")
+	}
+}
+
+func TestDeleteRouteUnit(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	mgr := newManager(client)
+	ctx := context.Background()
+	d := newDriver("spark-abc", "my-job")
+
+	mgr.Ensure(ctx, d)
+	mgr.Delete(ctx, d.AppSelector)
+
+	if routeExists(t, client, d.RouteName()) {
+		t.Fatal("expected route to be gone after Delete")
+	}
+}
+
+func TestDeleteRouteNotFound(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	mgr := newManager(client)
+	ctx := context.Background()
+
+	// Delete on a non-existent route should be a no-op (Manager swallows NotFound).
+	mgr.Delete(ctx, "ghost")
+	// No panic or error expected; simply verify no routes were created.
+	if routes := listRoutes(t, client); len(routes) != 0 {
+		t.Errorf("expected 0 routes, got %d", len(routes))
+	}
+}
+
+func TestListRoutesWithLabelSelector(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	mgr := newManager(client)
+	ctx := context.Background()
+
+	mgr.Ensure(ctx, newDriver("spark-aaa", "job-a"))
+	mgr.Ensure(ctx, newDriver("spark-bbb", "job-b"))
+
+	routes := listRoutes(t, client)
+	if len(routes) != 2 {
+		t.Errorf("expected 2 routes, got %d", len(routes))
+	}
+}
+
+func TestListRoutesEmptyResult(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	_ = newManager(client)
+
+	routes := listRoutes(t, client)
+	if len(routes) != 0 {
+		t.Errorf("expected 0 routes, got %d", len(routes))
+	}
+}
+
+// TestCreateRouteHasCorrectStructure verifies that the created HTTPRoute
+// contains the expected path prefix, hostname, gateway ref, and backend.
+func TestCreateRouteHasCorrectStructure(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	mgr := newManager(client)
+	ctx := context.Background()
+	d := newDriver("spark-abc123", "my-spark-job")
+
+	mgr.Ensure(ctx, d)
+
+	route, err := client.Resource(httpRouteGVR).Namespace(namespace).Get(
+		ctx, d.RouteName(), metav1.GetOptions{},
+	)
+	if err != nil {
+		t.Fatalf("Get route: %v", err)
+	}
+
+	// Hostname
+	hostnames, _, _ := unstructured.NestedStringSlice(route.Object, "spec", "hostnames")
+	if len(hostnames) == 0 || hostnames[0] != testCfg.Hostname {
+		t.Errorf("expected hostname %q, got %v", testCfg.Hostname, hostnames)
+	}
+
+	// Gateway parentRef name
+	parentRefs, _, _ := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
+	if len(parentRefs) == 0 {
+		t.Fatal("expected parentRefs, got none")
+	}
+	gwName, _, _ := unstructured.NestedString(parentRefs[0].(map[string]interface{}), "name")
+	if gwName != testCfg.GatewayName {
+		t.Errorf("expected gateway %q, got %q", testCfg.GatewayName, gwName)
+	}
+
+	// Three rules
+	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+	if len(rules) != 3 {
+		t.Fatalf("expected 3 rules, got %d", len(rules))
+	}
+
+	// Rule 0: Exact /proxy/spark-abc123
+	rule0 := rules[0].(map[string]interface{})
+	matches0, _, _ := unstructured.NestedSlice(rule0, "matches")
+	pathType0, _, _ := unstructured.NestedString(matches0[0].(map[string]interface{}), "path", "type")
+	pathVal0, _, _ := unstructured.NestedString(matches0[0].(map[string]interface{}), "path", "value")
+	if pathType0 != "Exact" || pathVal0 != "/proxy/spark-abc123" {
+		t.Errorf("rule 0: expected Exact /proxy/spark-abc123, got %s %s", pathType0, pathVal0)
+	}
+
+	// Rule 2: PathPrefix /proxy/spark-abc123 with backendRef to <appName>-ui-svc
+	rule2 := rules[2].(map[string]interface{})
+	backends, _, _ := unstructured.NestedSlice(rule2, "backendRefs")
+	if len(backends) == 0 {
+		t.Fatal("rule 2: expected backendRefs")
+	}
+	backendName, _, _ := unstructured.NestedString(backends[0].(map[string]interface{}), "name")
+	if backendName != "my-spark-job-ui-svc" {
+		t.Errorf("rule 2: expected backend my-spark-job-ui-svc, got %q", backendName)
 	}
 }
