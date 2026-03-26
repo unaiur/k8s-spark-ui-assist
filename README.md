@@ -18,6 +18,9 @@ them hard to bookmark or share.
 4. Creating a [Gateway API](https://gateway-api.sigs.k8s.io/) `HTTPRoute` for
    each driver as it starts, and deleting it when the job finishes, so the UIs are
    reachable through a shared gateway hostname without extra manual steps.
+5. Optionally watching a [Spark History Server](https://spark.apache.org/docs/latest/monitoring.html)
+   service and dynamically pointing the root `/` route to it when it has ready pods,
+   falling back to the dashboard when it does not.
 
 ## Requirements
 
@@ -86,8 +89,19 @@ helm install spark-assist ./chart \
   --set httpGatewayNamespace=gateway-system
 ```
 
-All three Gateway parameters are required; the chart fails with a clear error if any
+The three Gateway parameters are required; the chart fails with a clear error if any
 are omitted.
+
+To also enable Spark History Server integration:
+
+```sh
+helm install spark-assist ./chart \
+  --namespace spark --create-namespace \
+  --set httpHostname=spark.example.com \
+  --set httpGatewayName=main-gateway \
+  --set httpGatewayNamespace=gateway-system \
+  --set shsService=spark-history-server
+```
 
 #### Helm values
 
@@ -96,6 +110,7 @@ are omitted.
 | `httpHostname` | _(required)_ | Hostname for the service HTTPRoute and all Spark driver HTTPRoutes (`spec.hostnames[0]`) |
 | `httpGatewayName` | _(required)_ | Gateway name for all HTTPRoutes (`spec.parentRefs[0].name`) |
 | `httpGatewayNamespace` | _(required)_ | Gateway namespace for all HTTPRoutes (`spec.parentRefs[0].namespace`) |
+| `shsService` | `""` | Kubernetes Service name of the Spark History Server. When set, the root `/` HTTPRoute points to this service while it has ready pods, and falls back to the dashboard when it does not. |
 | `image.repository` | `ghcr.io/unaiur/k8s-spark-ui-assist` | Container image repository |
 | `image.tag` | chart `appVersion` | Image tag |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy |
@@ -134,8 +149,10 @@ The service falls back to your local `~/.kube/config` when it is not running ins
 | `-http-route.hostname` | _(required)_ | Hostname placed in `spec.hostnames[0]` |
 | `-http-route.gateway-name` | _(required)_ | Gateway name for `spec.parentRefs[0].name` |
 | `-http-route.gateway-namespace` | _(required)_ | Gateway namespace for `spec.parentRefs[0].namespace` |
+| `-self-service` | _(required)_ | Kubernetes Service name for this application; used to name and build the fallback root HTTPRoute for `/` |
+| `-shs-service` | _(optional)_ | Kubernetes Service name of the Spark History Server. When set, the root `/` HTTPRoute is managed dynamically: pointing to SHS while it has ready pods, and to the dashboard otherwise |
 
-All three `-http-route.*` flags are required; the service exits immediately with an error
+All four `-http-route.*` and `-self-service` flags are required; the service exits immediately with an error
 listing the missing flags if any are omitted.
 
 ## Web UI
