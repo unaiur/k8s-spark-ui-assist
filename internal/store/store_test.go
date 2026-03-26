@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -71,4 +72,47 @@ func TestConcurrency(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// ---- Driver.RouteName -------------------------------------------------------
+
+func TestRouteNameSimple(t *testing.T) {
+	d := Driver{AppSelector: "spark-abc123"}
+	if got := d.RouteName(); got != "spark-abc123-ui-route" {
+		t.Errorf("got %q, want spark-abc123-ui-route", got)
+	}
+}
+
+func TestRouteNameSanitization(t *testing.T) {
+	cases := []struct {
+		appSelector string
+		want        string
+	}{
+		{"Spark_App.123", "spark-app-123-ui-route"},
+		{"UPPER_CASE", "upper-case-ui-route"},
+		{"with.dots", "with-dots-ui-route"},
+		{"already-valid", "already-valid-ui-route"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.appSelector, func(t *testing.T) {
+			d := Driver{AppSelector: tc.appSelector}
+			if got := d.RouteName(); got != tc.want {
+				t.Errorf("RouteName() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRouteNameTruncation(t *testing.T) {
+	// Build an AppSelector whose sanitised form + "-ui-route" exceeds 253 chars.
+	long := strings.Repeat("abcdefghij", 26) // 260 chars
+	d := Driver{AppSelector: long}
+	name := d.RouteName()
+	if len(name) > 253 {
+		t.Errorf("route name length %d exceeds 253: %q", len(name), name)
+	}
+	const suffix = "-ui-route"
+	if !strings.HasSuffix(name, suffix) {
+		t.Errorf("route name does not end with %q: %q", suffix, name)
+	}
 }
