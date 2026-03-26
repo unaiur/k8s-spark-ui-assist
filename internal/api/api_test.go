@@ -163,7 +163,7 @@ func TestGetRunningDriver(t *testing.T) {
 	addPod(t, client, makePod("spark-abc", "running", "", 0))
 	h := newHandler(client)
 
-	code, body := getJSON(t, h, "/proxy/api/spark-abc")
+	code, body := getJSON(t, h, "/proxy/api/state/spark-abc")
 	if code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
@@ -181,7 +181,7 @@ func TestGetWaitingDriverWithReason(t *testing.T) {
 	addPod(t, client, makePod("spark-abc", "waiting", "ContainerCreating", 0))
 	h := newHandler(client)
 
-	code, body := getJSON(t, h, "/proxy/api/spark-abc")
+	code, body := getJSON(t, h, "/proxy/api/state/spark-abc")
 	if code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
@@ -196,7 +196,7 @@ func TestGetTerminatedDriverCompleted(t *testing.T) {
 	addPod(t, client, makePod("spark-abc", "terminated", "", 0))
 	h := newHandler(client)
 
-	code, body := getJSON(t, h, "/proxy/api/spark-abc")
+	code, body := getJSON(t, h, "/proxy/api/state/spark-abc")
 	if code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
@@ -211,7 +211,7 @@ func TestGetTerminatedDriverError(t *testing.T) {
 	addPod(t, client, makePod("spark-abc", "terminated", "", 1))
 	h := newHandler(client)
 
-	code, body := getJSON(t, h, "/proxy/api/spark-abc")
+	code, body := getJSON(t, h, "/proxy/api/state/spark-abc")
 	if code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
@@ -227,7 +227,7 @@ func TestGetTerminatedDriverWithReason(t *testing.T) {
 	addPod(t, client, makePod("spark-abc", "terminated", "OOMKilled", 137))
 	h := newHandler(client)
 
-	code, body := getJSON(t, h, "/proxy/api/spark-abc")
+	code, body := getJSON(t, h, "/proxy/api/state/spark-abc")
 	if code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
@@ -241,7 +241,7 @@ func TestGetDriverNotFound(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
 	h := newHandler(client)
 
-	code, body := getJSON(t, h, "/proxy/api/unknown-app")
+	code, body := getJSON(t, h, "/proxy/api/state/unknown-app")
 	if code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", code)
 	}
@@ -255,7 +255,7 @@ func TestMethodNotAllowed(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
 	h := newHandler(client)
 
-	req := httptest.NewRequest(http.MethodPost, "/proxy/api/spark-abc", nil)
+	req := httptest.NewRequest(http.MethodPost, "/proxy/api/state/spark-abc", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -264,12 +264,12 @@ func TestMethodNotAllowed(t *testing.T) {
 	}
 }
 
-// TestEmptyAppIDReturnsNotFound verifies that /proxy/api/ (no appID) returns 404.
+// TestEmptyAppIDReturnsNotFound verifies that /proxy/api/state/ (no appID) returns 404.
 func TestEmptyAppIDReturnsNotFound(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
 	h := newHandler(client)
 
-	code, _ := getJSON(t, h, "/proxy/api/")
+	code, _ := getJSON(t, h, "/proxy/api/state/")
 	if code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", code)
 	}
@@ -283,7 +283,7 @@ func TestInvalidAppIDReturnsBadRequest(t *testing.T) {
 
 	// Commas and equals signs are invalid in label values and are also selector
 	// metacharacters, making injection possible without validation.
-	code, body := getJSON(t, h, "/proxy/api/bad,app=id")
+	code, body := getJSON(t, h, "/proxy/api/state/bad,app=id")
 	if code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", code)
 	}
@@ -317,7 +317,7 @@ func TestOnlyDriverPodsMatched(t *testing.T) {
 	addPod(t, client, nonDriver)
 	h := newHandler(client)
 
-	code, body := getJSON(t, h, "/proxy/api/spark-abc")
+	code, body := getJSON(t, h, "/proxy/api/state/spark-abc")
 	if code != http.StatusNotFound {
 		t.Errorf("expected 404 (non-driver pod should not match), got %d; body: %v", code, body)
 	}
@@ -330,7 +330,7 @@ func TestPendingDriverNoConditions(t *testing.T) {
 	addPod(t, client, makePendingPod("spark-abc", ""))
 	h := newHandler(client)
 
-	code, body := getJSON(t, h, "/proxy/api/spark-abc")
+	code, body := getJSON(t, h, "/proxy/api/state/spark-abc")
 	if code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
@@ -346,7 +346,7 @@ func TestPendingDriverUnschedulable(t *testing.T) {
 	addPod(t, client, makePendingPod("spark-abc", "Unschedulable"))
 	h := newHandler(client)
 
-	code, body := getJSON(t, h, "/proxy/api/spark-abc")
+	code, body := getJSON(t, h, "/proxy/api/state/spark-abc")
 	if code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
