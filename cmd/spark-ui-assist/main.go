@@ -51,7 +51,7 @@ func main() {
 
 	onSynced := func() {
 		log.Printf("httproute: informer synced, reconciling routes")
-		if err := mgr.Reconcile(ctx, s.List()); err != nil {
+		if err := mgr.Reconcile(ctx, s.ListRunning()); err != nil {
 			log.Printf("httproute: initial reconcile failed: %v", err)
 		}
 	}

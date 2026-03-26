@@ -28,7 +28,9 @@ func newScheme() *runtime.Scheme {
 	return s
 }
 
-// driverPod returns a running Spark driver pod with the given name and appID.
+// driverPod returns a Spark driver pod with no phase set (not yet admitted)
+// with the given name and appID. The pod will appear in the store but will NOT
+// trigger OnAdd (HTTPRoute creation) until it transitions to Running.
 func driverPod(name, appID string) *unstructured.Unstructured {
 	pod := &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -48,6 +50,22 @@ func driverPod(name, appID string) *unstructured.Unstructured {
 		},
 	}
 	pod.SetCreationTimestamp(metav1.Now())
+	return pod
+}
+
+// pendingDriverPod returns a Spark driver pod with status.phase explicitly set
+// to "Pending". It appears in the store but does NOT trigger OnAdd.
+func pendingDriverPod(name, appID string) *unstructured.Unstructured {
+	pod := driverPod(name, appID)
+	_ = unstructured.SetNestedField(pod.Object, "Pending", "status", "phase")
+	return pod
+}
+
+// runningDriverPod returns a Spark driver pod in the Running phase.
+// Only Running pods trigger OnAdd (HTTPRoute creation).
+func runningDriverPod(name, appID string) *unstructured.Unstructured {
+	pod := driverPod(name, appID)
+	_ = unstructured.SetNestedField(pod.Object, "Running", "status", "phase")
 	return pod
 }
 
@@ -218,10 +236,10 @@ func TestNewListerWatcherListsWithSelector(t *testing.T) {
 
 // ---- Watch: AddFunc ---------------------------------------------------------
 
-// TestWatchAddsDriverToStore verifies that a running driver pod present at
-// startup is added to the store and triggers OnAdd.
+// TestWatchAddsDriverToStore verifies that a Running driver pod present at
+// startup is added to the store with StateRunning and triggers OnAdd.
 func TestWatchAddsDriverToStore(t *testing.T) {
-	s, h := runWatch(t, driverPod("driver-1", "spark-abc"))
+	s, h := runWatch(t, runningDriverPod("driver-1", "spark-abc"))
 
 	drivers := s.List()
 	if len(drivers) != 1 {
@@ -232,6 +250,9 @@ func TestWatchAddsDriverToStore(t *testing.T) {
 	}
 	if drivers[0].AppSelector != "spark-abc" {
 		t.Errorf("expected AppSelector spark-abc, got %q", drivers[0].AppSelector)
+	}
+	if drivers[0].State != store.StateRunning {
+		t.Errorf("expected State Running, got %q", drivers[0].State)
 	}
 	if added := h.addedSnapshot(); len(added) != 1 || added[0].PodName != "driver-1" {
 		t.Errorf("expected OnAdd called once with driver-1, got %v", h.addedSnapshot())
@@ -276,12 +297,12 @@ func TestWatchIgnoresFailedPodsOnAdd(t *testing.T) {
 	}
 }
 
-// TestWatchMultipleDrivers verifies that multiple running drivers all appear
+// TestWatchMultipleDrivers verifies that multiple Running drivers all appear
 // in the store.
 func TestWatchMultipleDrivers(t *testing.T) {
 	s, h := runWatch(t,
-		driverPod("driver-1", "spark-aaa"),
-		driverPod("driver-2", "spark-bbb"),
+		runningDriverPod("driver-1", "spark-aaa"),
+		runningDriverPod("driver-2", "spark-bbb"),
 	)
 
 	if got := len(s.List()); got != 2 {
@@ -351,11 +372,11 @@ func TestWatchUpdateTerminatesDriver(t *testing.T) {
 	}
 }
 
-// TestWatchUpdateRunningDriverUpserts verifies that updating a still-running
+// TestWatchUpdateRunningDriverUpserts verifies that updating a still-Running
 // driver pod keeps it in the store (re-upsert) and fires OnAdd again.
 func TestWatchUpdateRunningDriverUpserts(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
-	pod := driverPod("driver-1", "spark-abc")
+	pod := runningDriverPod("driver-1", "spark-abc")
 	if _, err := client.Resource(podGVR).Namespace("default").Create(
 		context.Background(), pod, metav1.CreateOptions{},
 	); err != nil {
@@ -379,7 +400,7 @@ func TestWatchUpdateRunningDriverUpserts(t *testing.T) {
 
 	addedBefore := h.numAdded()
 
-	// Touch the pod (still running — no phase change).
+	// Touch the pod (still Running — no phase change).
 	updated := pod.DeepCopy()
 	updated.SetAnnotations(map[string]string{"touched": "yes"})
 	if _, err := client.Resource(podGVR).Namespace("default").Update(
@@ -401,6 +422,95 @@ func TestWatchUpdateRunningDriverUpserts(t *testing.T) {
 	}
 	if got := len(s.List()); got != 1 {
 		t.Errorf("expected driver still in store, got %d", got)
+	}
+}
+
+// ---- Watch: pending pod behaviour -------------------------------------------
+
+// TestWatchPendingPodAddedToStoreOnly verifies that a Spark driver pod in the
+// Pending phase is added to the store with StatePending but does NOT trigger
+// OnAdd, since HTTPRoutes should only be created when the pod is Running.
+func TestWatchPendingPodAddedToStoreOnly(t *testing.T) {
+	s, h := runWatch(t, pendingDriverPod("driver-pending", "spark-xyz"))
+
+	drivers := s.List()
+	if len(drivers) != 1 {
+		t.Fatalf("expected pending pod to appear in store, got %d entries", len(drivers))
+	}
+	if drivers[0].PodName != "driver-pending" {
+		t.Errorf("expected PodName driver-pending, got %q", drivers[0].PodName)
+	}
+	if drivers[0].State != store.StatePending {
+		t.Errorf("expected State Pending, got %q", drivers[0].State)
+	}
+	if h.numAdded() != 0 {
+		t.Errorf("expected no OnAdd calls for pending pod, got %d", h.numAdded())
+	}
+}
+
+// TestWatchPendingToRunningTriggersOnAdd verifies that when a Spark driver pod
+// transitions from Pending to Running, OnAdd is fired and the driver remains
+// in the store with StateRunning.
+func TestWatchPendingToRunningTriggersOnAdd(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	pod := pendingDriverPod("driver-1", "spark-abc")
+	if _, err := client.Resource(podGVR).Namespace("default").Create(
+		context.Background(), pod, metav1.CreateOptions{},
+	); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	s := store.New()
+	h := &recordingHandler{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	synced := make(chan struct{})
+	lw := watcher.NewListerWatcher("default", client)
+	go watcher.Watch(ctx, lw, s, h, func() { close(synced) })
+
+	select {
+	case <-synced:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for sync")
+	}
+
+	// After initial sync the pod is in the store but OnAdd was not called.
+	if got := len(s.List()); got != 1 {
+		t.Fatalf("expected pending pod in store after sync, got %d", got)
+	}
+	if s.List()[0].State != store.StatePending {
+		t.Errorf("expected State Pending after sync, got %q", s.List()[0].State)
+	}
+	if h.numAdded() != 0 {
+		t.Errorf("expected no OnAdd after sync of pending pod, got %d", h.numAdded())
+	}
+
+	// Transition the pod to Running.
+	updated := pod.DeepCopy()
+	_ = unstructured.SetNestedField(updated.Object, "Running", "status", "phase")
+	if _, err := client.Resource(podGVR).Namespace("default").Update(
+		context.Background(), updated, metav1.UpdateOptions{},
+	); err != nil {
+		t.Fatalf("update to Running: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if h.numAdded() > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if h.numAdded() == 0 {
+		t.Error("expected OnAdd to fire when pod transitions to Running")
+	}
+	drivers := s.List()
+	if got := len(drivers); got != 1 {
+		t.Errorf("expected driver still in store after Running transition, got %d", got)
+	} else if drivers[0].State != store.StateRunning {
+		t.Errorf("expected State Running after transition, got %q", drivers[0].State)
 	}
 }
 
