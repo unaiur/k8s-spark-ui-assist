@@ -17,6 +17,7 @@ import (
 	"github.com/unaiur/k8s-spark-ui-assist/internal/config"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/httproute"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/server"
+	"github.com/unaiur/k8s-spark-ui-assist/internal/shs"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/store"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/watcher"
 )
@@ -54,6 +55,13 @@ func main() {
 	}
 	go watcher.Watch(ctx, lw, s, routeHandler, onSynced)
 
+	// Start the SHS Endpoints watcher if configured.
+	if cfg.HTTPRoute.SHSService != "" {
+		shsHandler := &shsRouteHandler{ctx: ctx, mgr: mgr}
+		go shs.Watch(ctx, dynClient, cfg.Namespace, cfg.HTTPRoute.SHSService, shsHandler, nil)
+		log.Printf("shs: watching Endpoints for service %q", cfg.HTTPRoute.SHSService)
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("/proxy/api/", api.Handler(s, mgr))
 	mux.Handle("/", server.Handler(s, time.Now, mgr))
@@ -90,6 +98,20 @@ func (h *httpRouteHandler) OnAdd(d store.Driver) {
 
 func (h *httpRouteHandler) OnRemove(appSelector string) {
 	h.mgr.Delete(h.ctx, appSelector)
+}
+
+// shsRouteHandler bridges SHS Endpoints events to the HTTPRoute manager.
+type shsRouteHandler struct {
+	ctx context.Context
+	mgr *httproute.Manager
+}
+
+func (h *shsRouteHandler) OnUp() {
+	h.mgr.EnsureSHSRoute(h.ctx)
+}
+
+func (h *shsRouteHandler) OnDown() {
+	h.mgr.EnsureFallbackRootRoute(h.ctx)
 }
 
 // loadKubeConfig tries in-cluster config first, then falls back to KUBECONFIG / default kubeconfig.

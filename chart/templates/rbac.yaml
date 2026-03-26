@@ -10,6 +10,10 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["list", "watch"]
+  # Watch the Spark History Server Endpoints to detect availability changes.
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["list", "watch"]
   # Manage per-driver HTTPRoutes: create on driver start, delete on driver end,
   # list to reconcile stale routes on startup, get to check existence.
   - apiGroups: ["gateway.networking.k8s.io"]

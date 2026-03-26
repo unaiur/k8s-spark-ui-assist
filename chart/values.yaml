@@ -4,6 +4,12 @@ httpHostname: ""          # e.g. spark.example.com
 httpGatewayName: ""       # e.g. main-gateway
 httpGatewayNamespace: ""  # e.g. gateway-system
 
+# Optional: Kubernetes Service name of the Spark History Server.
+# When set, a managed HTTPRoute for "/" is created pointing to this service
+# when it has at least one ready pod, and falls back to the dashboard when it
+# does not. When not set, the static HTTPRoute also claims "/" for the dashboard.
+shsService: ""
+
 # Container image.
 image:
   repository: ghcr.io/unaiur/k8s-spark-ui-assist

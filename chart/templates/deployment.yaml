@@ -38,19 +38,23 @@ spec:
             - -http-route.hostname={{ include "k8s-spark-ui-assist.httpHostname" . }}
             - -http-route.gateway-name={{ include "k8s-spark-ui-assist.httpGatewayName" . }}
             - -http-route.gateway-namespace={{ include "k8s-spark-ui-assist.httpGatewayNamespace" . }}
+            - -self-service={{ include "k8s-spark-ui-assist.fullname" . }}
+            {{- if .Values.shsService }}
+            - -shs-service={{ .Values.shsService }}
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080
               protocol: TCP
           readinessProbe:
             httpGet:
-              path: /
+              path: /proxy/
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /
+              path: /proxy/
               port: http
             initialDelaySeconds: 10
             periodSeconds: 30

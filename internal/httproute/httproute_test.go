@@ -308,7 +308,142 @@ func TestListRoutesEmptyResult(t *testing.T) {
 	}
 }
 
-// TestCreateRouteHasCorrectStructure verifies that the created HTTPRoute
+// testCfgSHS is an HTTPRouteConfig with SHS integration enabled.
+var testCfgSHS = config.HTTPRouteConfig{
+	Hostname:         "spark.example.com",
+	GatewayName:      "main-gateway",
+	GatewayNamespace: "gateway-ns",
+	SelfService:      "spark-ui-assist",
+	SHSService:       "spark-history-server",
+}
+
+// newManagerSHS creates a Manager with SHS config wired to the fake client.
+func newManagerSHS(client *dynamicfake.FakeDynamicClient) *httproute.Manager {
+	return httproute.New(context.Background(), client, namespace, testCfgSHS)
+}
+
+// ---- SHS root route tests ---------------------------------------------------
+
+// TestEnsureSHSRouteCreatesSHSRoute verifies that EnsureSHSRoute creates a root
+// HTTPRoute pointing to the SHS service.
+func TestEnsureSHSRouteCreatesSHSRoute(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	mgr := newManagerSHS(client)
+	ctx := context.Background()
+
+	mgr.EnsureSHSRoute(ctx)
+
+	routeName := "spark-ui-assist-root-route"
+	if !routeExists(t, client, routeName) {
+		t.Fatalf("expected HTTPRoute %s to exist after EnsureSHSRoute", routeName)
+	}
+
+	route, _ := client.Resource(httpRouteGVR).Namespace(namespace).Get(ctx, routeName, metav1.GetOptions{})
+	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 rule in SHS root route, got %d", len(rules))
+	}
+	backends, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "backendRefs")
+	backendName, _, _ := unstructured.NestedString(backends[0].(map[string]interface{}), "name")
+	if backendName != testCfgSHS.SHSService {
+		t.Errorf("expected backend %q, got %q", testCfgSHS.SHSService, backendName)
+	}
+}
+
+// TestEnsureFallbackRootRouteCreatesFallback verifies that EnsureFallbackRootRoute
+// creates a root HTTPRoute pointing to the self service.
+func TestEnsureFallbackRootRouteCreatesFallback(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	mgr := newManagerSHS(client)
+	ctx := context.Background()
+
+	mgr.EnsureFallbackRootRoute(ctx)
+
+	routeName := "spark-ui-assist-root-route"
+	if !routeExists(t, client, routeName) {
+		t.Fatalf("expected HTTPRoute %s to exist after EnsureFallbackRootRoute", routeName)
+	}
+
+	route, _ := client.Resource(httpRouteGVR).Namespace(namespace).Get(ctx, routeName, metav1.GetOptions{})
+	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+	backends, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "backendRefs")
+	backendName, _, _ := unstructured.NestedString(backends[0].(map[string]interface{}), "name")
+	if backendName != testCfgSHS.SelfService {
+		t.Errorf("expected backend %q, got %q", testCfgSHS.SelfService, backendName)
+	}
+}
+
+// TestSHSRouteTransitionSHSToFallback verifies that switching from the SHS route
+// to the fallback replaces the route rather than leaving both.
+func TestSHSRouteTransitionSHSToFallback(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	mgr := newManagerSHS(client)
+	ctx := context.Background()
+
+	mgr.EnsureSHSRoute(ctx)
+	mgr.EnsureFallbackRootRoute(ctx) // SHS went down
+
+	routes := listRoutes(t, client)
+	if len(routes) != 1 {
+		t.Fatalf("expected exactly 1 root route after transition, got %d", len(routes))
+	}
+	route := routes[0]
+	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+	backends, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "backendRefs")
+	backendName, _, _ := unstructured.NestedString(backends[0].(map[string]interface{}), "name")
+	if backendName != testCfgSHS.SelfService {
+		t.Errorf("after transition to fallback, expected backend %q, got %q", testCfgSHS.SelfService, backendName)
+	}
+}
+
+// TestDeleteRootRouteRemovesRoute verifies that DeleteRootRoute removes the
+// managed root HTTPRoute.
+func TestDeleteRootRouteRemovesRoute(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	mgr := newManagerSHS(client)
+	ctx := context.Background()
+
+	mgr.EnsureSHSRoute(ctx)
+	mgr.DeleteRootRoute(ctx)
+
+	if routeExists(t, client, "spark-ui-assist-root-route") {
+		t.Fatal("expected root route to be deleted")
+	}
+}
+
+// TestEnsureSHSRouteNoopWhenNotConfigured verifies that EnsureSHSRoute is a
+// no-op when SHSService is not set.
+func TestEnsureSHSRouteNoopWhenNotConfigured(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	mgr := newManager(client) // uses testCfg with no SHSService
+	ctx := context.Background()
+
+	mgr.EnsureSHSRoute(ctx)
+
+	if routes := listRoutes(t, client); len(routes) != 0 {
+		t.Errorf("expected 0 routes, got %d", len(routes))
+	}
+}
+
+// TestReconcileDoesNotDeleteRootRoute verifies that Reconcile leaves the managed
+// root route untouched (it is lifecycle-managed by the SHS watcher, not Reconcile).
+func TestReconcileDoesNotDeleteRootRoute(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	mgr := newManagerSHS(client)
+	ctx := context.Background()
+
+	mgr.EnsureSHSRoute(ctx)
+
+	// Reconcile with empty active list — should NOT delete the root route.
+	if err := mgr.Reconcile(ctx, nil); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	if !routeExists(t, client, "spark-ui-assist-root-route") {
+		t.Fatal("Reconcile must not delete the managed root route")
+	}
+}
+
 // contains the expected path prefix, hostname, gateway ref, and backend.
 func TestCreateRouteHasCorrectStructure(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())

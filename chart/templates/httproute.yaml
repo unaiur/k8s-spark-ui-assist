@@ -14,7 +14,19 @@ spec:
   hostnames:
     - {{ include "k8s-spark-ui-assist.httpHostname" . | quote }}
   rules:
-    # Catch-all rule for the dashboard UI.
+    # Route /proxy to the dashboard UI.
+    # When SHS is not configured, "/" is also handled here so the dashboard is
+    # reachable at the root path.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /proxy
+      backendRefs:
+        - name: {{ include "k8s-spark-ui-assist.fullname" . }}
+          port: {{ .Values.service.port }}
+    {{- if not .Values.shsService }}
+    # When no SHS service is configured, also claim "/" so the dashboard is
+    # reachable at the root path.
     - matches:
         - path:
             type: PathPrefix
@@ -22,3 +34,4 @@ spec:
       backendRefs:
         - name: {{ include "k8s-spark-ui-assist.fullname" . }}
           port: {{ .Values.service.port }}
+    {{- end }}
