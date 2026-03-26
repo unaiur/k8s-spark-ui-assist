@@ -65,10 +65,15 @@ func (c *HTTPRouteConfig) Validate() error {
 	return nil
 }
 
+// inClusterNamespacePath is the path of the service-account namespace file.
+// It is a variable so tests can override it without touching the filesystem at
+// the real mount point.
+var inClusterNamespacePath = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
 // inClusterNamespace reads the namespace from the service-account volume mount.
 // Returns "default" if the file is not present (running outside a cluster).
 func inClusterNamespace() string {
-	data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	data, err := os.ReadFile(inClusterNamespacePath)
 	if err != nil {
 		return "default"
 	}

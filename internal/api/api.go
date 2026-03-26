@@ -17,28 +17,21 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation"
-	"k8s.io/client-go/dynamic"
 
-	"github.com/unaiur/k8s-spark-ui-assist/internal/labels"
+	k8ssvc "github.com/unaiur/k8s-spark-ui-assist/internal/k8s"
 )
 
 // statePrefix is the URL path prefix for the state endpoint.
 const statePrefix = "/proxy/api/state/"
 
-var podGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
-
 // Handler returns an http.Handler that serves all /proxy/api/ endpoints.
-// namespace is the Kubernetes namespace to query for driver pods.
-func Handler(client dynamic.Interface, namespace string) http.Handler {
+// svc is used to query Kubernetes for driver pod state.
+func Handler(svc *k8ssvc.KubernetesSvc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Extract the appID from the path: /proxy/api/state/{appID}
 		appID := strings.TrimPrefix(r.URL.Path, statePrefix)
@@ -60,7 +53,7 @@ func Handler(client dynamic.Interface, namespace string) http.Handler {
 			return
 		}
 
-		state, err := driverState(r.Context(), client, namespace, appID)
+		state, err := svc.SparkDriverState(appID)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -72,138 +65,6 @@ func Handler(client dynamic.Interface, namespace string) http.Handler {
 
 		writeJSON(w, http.StatusOK, map[string]string{"appID": appID, "state": state})
 	})
-}
-
-// driverState queries Kubernetes for the driver pod matching appID and returns
-// its state string. Returns ("", nil) when no matching pod exists.
-//
-// State derivation rules (in priority order):
-//  1. If any container status is present, inspect the first container:
-//     - waiting  → waiting.reason (e.g. "ContainerCreating", "CrashLoopBackOff")
-//     - running  → "Running"
-//     - terminated → terminated.reason if non-empty, else terminated.exitCode as
-//     "Error" (non-zero) or "Completed" (zero)
-//  2. No container status yet (pod not yet started): inspect pod conditions for a
-//     False PodScheduled condition and return its reason (e.g. "Unschedulable");
-//     otherwise return "Pending".
-func driverState(ctx context.Context, client dynamic.Interface, namespace, appID string) (string, error) {
-	list, err := client.Resource(podGVR).Namespace(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: labels.DriverSelectorForApp(appID),
-	})
-	if err != nil {
-		return "", err
-	}
-	if len(list.Items) == 0 {
-		return "", nil
-	}
-
-	// If multiple pods exist (e.g. a restart), use the most recently created one.
-	pod := mostRecent(list.Items)
-	return stateFromPod(pod), nil
-}
-
-// mostRecent returns the pod with the latest creation timestamp.
-func mostRecent(pods []unstructured.Unstructured) unstructured.Unstructured {
-	best := pods[0]
-	for _, p := range pods[1:] {
-		if p.GetCreationTimestamp().After(best.GetCreationTimestamp().Time) {
-			best = p
-		}
-	}
-	return best
-}
-
-// stateFromPod derives a human-readable state string from a pod object.
-func stateFromPod(pod unstructured.Unstructured) string {
-	containerStatuses, _, _ := unstructured.NestedSlice(pod.Object, "status", "containerStatuses")
-	if len(containerStatuses) > 0 {
-		if cs, ok := containerStatuses[0].(map[string]interface{}); ok {
-			if state := containerStateString(cs); state != "" {
-				return state
-			}
-		}
-	}
-
-	// No container status yet — pod has not started.  Check conditions for a
-	// more specific reason (e.g. scheduling failure) before falling back to
-	// "Pending".
-	return pendingReason(pod)
-}
-
-// pendingReason returns a waiting-style reason for a pod that has no container
-// statuses yet.  It looks for a PodScheduled condition with status "False" and
-// returns its Reason field (e.g. "Unschedulable"); otherwise it returns
-// "Pending".
-func pendingReason(pod unstructured.Unstructured) string {
-	conditions, _, _ := unstructured.NestedSlice(pod.Object, "status", "conditions")
-	for _, raw := range conditions {
-		cond, ok := raw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		condType, _ := cond["type"].(string)
-		condStatus, _ := cond["status"].(string)
-		if condType == "PodScheduled" && condStatus == "False" {
-			if reason, _ := cond["reason"].(string); reason != "" {
-				return reason
-			}
-		}
-	}
-	return "Pending"
-}
-
-// containerStateString extracts a state string from a containerStatus map.
-func containerStateString(cs map[string]interface{}) string {
-	stateMap, _, _ := unstructured.NestedMap(cs, "state")
-	if stateMap == nil {
-		return ""
-	}
-
-	if waiting, ok := stateMap["waiting"].(map[string]interface{}); ok {
-		if reason, _ := waiting["reason"].(string); reason != "" {
-			return reason
-		}
-		return "Waiting"
-	}
-
-	if _, ok := stateMap["running"]; ok {
-		return "Running"
-	}
-
-	if terminated, ok := stateMap["terminated"].(map[string]interface{}); ok {
-		if reason, _ := terminated["reason"].(string); reason != "" {
-			return reason
-		}
-		// exitCode may be int64 (from fake client) or float64 (from real JSON
-		// decoding), so handle both rather than relying on a single type assertion.
-		if isZeroExitCode(terminated) {
-			return "Completed"
-		}
-		return "Error"
-	}
-
-	return ""
-}
-
-// isZeroExitCode reports whether the exitCode field in a terminated container
-// status map is zero.  The Kubernetes API returns JSON numbers which are decoded
-// as float64 by the unstructured machinery; test fixtures may use int64.  Both
-// are handled explicitly.
-func isZeroExitCode(terminated map[string]interface{}) bool {
-	val, ok := terminated["exitCode"]
-	if !ok {
-		return false
-	}
-	switch v := val.(type) {
-	case int64:
-		return v == 0
-	case float64:
-		return v == 0
-	case int:
-		return v == 0
-	default:
-		return false
-	}
 }
 
 // writeJSON writes a JSON-encoded body with the given HTTP status code.

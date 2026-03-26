@@ -2,6 +2,10 @@
 package store
 
 import (
+	"crypto/sha256"
+	"fmt"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,6 +20,37 @@ type Driver struct {
 	AppSelector string
 	// AppName is the value of the spark-app-name label.
 	AppName string
+}
+
+// invalidDNSChars matches any character that is not allowed in a DNS-1123 label.
+var invalidDNSChars = regexp.MustCompile(`[^a-z0-9-]`)
+
+// RouteName converts the driver's AppSelector into a valid DNS-1123 subdomain
+// name and appends "-ui-route". Kubernetes label values allow uppercase letters,
+// dots, underscores, and up to 63 characters — none of which are universally
+// valid in resource names. The sanitisation steps are:
+//  1. Lowercase the selector.
+//  2. Replace any character that is not [a-z0-9-] with "-".
+//  3. If the result (plus the "-ui-route" suffix) exceeds 253 characters,
+//     truncate and append an 8-hex-character hash of the original selector so
+//     the name remains unique and deterministic.
+func (d Driver) RouteName() string {
+	const suffix = "-ui-route"
+	const maxLen = 253
+
+	sanitized := invalidDNSChars.ReplaceAllString(strings.ToLower(d.AppSelector), "-")
+
+	candidate := sanitized + suffix
+	if len(candidate) <= maxLen {
+		return candidate
+	}
+
+	// Hash the original selector to preserve uniqueness.
+	h := sha256.Sum256([]byte(d.AppSelector))
+	hash := fmt.Sprintf("%x", h[:4]) // 8 hex chars
+	// Truncate sanitized so that sanitized + "-" + hash + suffix fits in maxLen.
+	maxSanitized := maxLen - len(suffix) - 1 - len(hash)
+	return sanitized[:maxSanitized] + "-" + hash + suffix
 }
 
 // Store is a thread-safe in-memory store of Spark driver pods.
