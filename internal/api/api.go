@@ -15,13 +15,16 @@
 //	    405  {"error":"method not allowed"}      – non-GET request
 //	    500  {"error":"…"}                       – Kubernetes API error
 //
-//	POST /proxy/api/reconcile
+//	GET /proxy/api/reconcile
 //	  Triggers an immediate HTTPRoute reconciliation against the current set of
-//	  active drivers in the store.
+//	  active drivers in the store. Uses GET because the operation is idempotent
+//	  and has no side-effects beyond correcting drift; Cache-Control: no-store
+//	  is set on the response to prevent clients and proxies from caching it.
 //
 //	  Responses:
 //	    200  {"status":"ok"}                     – reconciliation succeeded
-//	    405  {"error":"method not allowed"}      – non-POST request
+//	    405  {"error":"method not allowed"}      – non-GET request
+//	    501  {"error":"…"}                       – httproute management not configured
 //	    500  {"error":"…"}                       – reconciliation error
 package api
 
@@ -98,9 +101,9 @@ func handleState(w http.ResponseWriter, r *http.Request, svc *k8ssvc.KubernetesS
 	writeJSON(w, http.StatusOK, map[string]string{"appID": appID, "state": state})
 }
 
-// handleReconcile serves POST /proxy/api/reconcile.
+// handleReconcile serves GET /proxy/api/reconcile.
 func handleReconcile(w http.ResponseWriter, r *http.Request, s *store.Store, rec Reconciler) {
-	if r.Method != http.MethodPost {
+	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
@@ -112,6 +115,7 @@ func handleReconcile(w http.ResponseWriter, r *http.Request, s *store.Store, rec
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

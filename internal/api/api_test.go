@@ -157,13 +157,13 @@ func TestHandlerInvalidAppIDReturnsBadRequest(t *testing.T) {
 
 // ---- /proxy/api/reconcile tests ---------------------------------------------
 
-// TestReconcileReturns200OnSuccess verifies that a POST to /proxy/api/reconcile
+// TestReconcileReturns200OnSuccess verifies that a GET to /proxy/api/reconcile
 // returns 200 when the reconciler succeeds.
 func TestReconcileReturns200OnSuccess(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
 	h := newHandler(client, store.New(), &stubReconciler{})
 
-	if code := post(h, "/proxy/api/reconcile"); code != http.StatusOK {
+	if code := get(h, "/proxy/api/reconcile"); code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
 }
@@ -173,17 +173,17 @@ func TestReconcileReturns500OnError(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
 	h := newHandler(client, store.New(), &stubReconciler{err: errors.New("k8s error")})
 
-	if code := post(h, "/proxy/api/reconcile"); code != http.StatusInternalServerError {
+	if code := get(h, "/proxy/api/reconcile"); code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d", code)
 	}
 }
 
-// TestReconcileMethodNotAllowed verifies that a non-POST request returns 405.
+// TestReconcileMethodNotAllowed verifies that a non-GET request returns 405.
 func TestReconcileMethodNotAllowed(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
 	h := newHandler(client, store.New(), &stubReconciler{})
 
-	if code := get(h, "/proxy/api/reconcile"); code != http.StatusMethodNotAllowed {
+	if code := post(h, "/proxy/api/reconcile"); code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", code)
 	}
 }
@@ -194,8 +194,23 @@ func TestReconcileNilReconcilerReturns501(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(newScheme())
 	h := newHandler(client, store.New(), nil)
 
-	if code := post(h, "/proxy/api/reconcile"); code != http.StatusNotImplemented {
+	if code := get(h, "/proxy/api/reconcile"); code != http.StatusNotImplemented {
 		t.Fatalf("expected 501, got %d", code)
+	}
+}
+
+// TestReconcileSetsNoCacheHeader verifies that a successful reconcile response
+// carries Cache-Control: no-store to prevent caching by proxies.
+func TestReconcileSetsNoCacheHeader(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	h := newHandler(client, store.New(), &stubReconciler{})
+
+	req := httptest.NewRequest(http.MethodGet, "/proxy/api/reconcile", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("expected Cache-Control: no-store, got %q", cc)
 	}
 }
 
@@ -210,7 +225,7 @@ func TestReconcilePassesActiveDriversToReconciler(t *testing.T) {
 	rec := &captureReconciler{}
 	h := newHandler(client, s, rec)
 
-	post(h, "/proxy/api/reconcile")
+	get(h, "/proxy/api/reconcile")
 
 	gotDrivers = rec.drivers
 	if len(gotDrivers) != 1 || gotDrivers[0].AppSelector != "spark-abc" {
