@@ -165,7 +165,7 @@ func TestWatchFiresOnDownAfterUpdate(t *testing.T) {
 
 	// Update the Endpoints to have no ready addresses.
 	epDown := buildEndpoints("spark-history-server", 0)
-	epDown.SetResourceVersion("2")
+	epDown.SetResourceVersion(ep.GetResourceVersion())
 	_, err := client.Resource(endpointsGVR).Namespace(namespace).Update(
 		context.Background(), epDown, metav1.UpdateOptions{},
 	)

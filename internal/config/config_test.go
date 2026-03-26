@@ -12,6 +12,7 @@ func fullConfig() HTTPRouteConfig {
 		Hostname:         "spark.example.com",
 		GatewayName:      "main-gw",
 		GatewayNamespace: "gateway-ns",
+		SelfService:      "spark-ui-assist",
 	}
 }
 
@@ -31,13 +32,14 @@ func TestValidate(t *testing.T) {
 			name:    "all fields missing",
 			cfg:     HTTPRouteConfig{},
 			wantErr: true,
-			wantMsg: "http-route.hostname, http-route.gateway-name, http-route.gateway-namespace",
+			wantMsg: "http-route.hostname, http-route.gateway-name, http-route.gateway-namespace, self-service",
 		},
 		{
 			name: "hostname missing",
 			cfg: HTTPRouteConfig{
 				GatewayName:      "main-gw",
 				GatewayNamespace: "gateway-ns",
+				SelfService:      "spark-ui-assist",
 			},
 			wantErr: true,
 			wantMsg: "http-route.hostname",
@@ -47,6 +49,7 @@ func TestValidate(t *testing.T) {
 			cfg: HTTPRouteConfig{
 				Hostname:         "spark.example.com",
 				GatewayNamespace: "gateway-ns",
+				SelfService:      "spark-ui-assist",
 			},
 			wantErr: true,
 			wantMsg: "http-route.gateway-name",
@@ -56,9 +59,20 @@ func TestValidate(t *testing.T) {
 			cfg: HTTPRouteConfig{
 				Hostname:    "spark.example.com",
 				GatewayName: "main-gw",
+				SelfService: "spark-ui-assist",
 			},
 			wantErr: true,
 			wantMsg: "http-route.gateway-namespace",
+		},
+		{
+			name: "self-service missing",
+			cfg: HTTPRouteConfig{
+				Hostname:         "spark.example.com",
+				GatewayName:      "main-gw",
+				GatewayNamespace: "gateway-ns",
+			},
+			wantErr: true,
+			wantMsg: "self-service",
 		},
 	}
 

@@ -24,7 +24,7 @@
 //   - EnsureFallbackRootRoute: creates or updates the root route to point
 //     "/" → this service itself. Called on startup (always) and when SHS goes
 //     down.
-//   - DeleteRootRoute: deletes the root route on shutdown.
+//   - DeleteRootRoute: deletes the root route (available for explicit cleanup).
 //
 // Reconcile() should be called once the pod informer has fully synced so that
 // stale routes left over from a previous instance of the service are cleaned up.
@@ -95,23 +95,46 @@ func (m *Manager) createDriverRoute(d store.Driver) error {
 	return err
 }
 
-// applyRoute creates the HTTPRoute if it does not exist, or updates it in-place
-// if it does. Using update (rather than delete-then-create) avoids a brief gap
-// during which no route exists.
+// applyRoute creates the HTTPRoute if it does not exist, or updates it
+// in-place if it does. Using update (rather than delete-then-create) avoids a
+// brief gap during which no route exists.
+//
+// Concurrent callers and resource-version conflicts are handled with a small
+// retry loop: on Conflict the current object is re-fetched and the update is
+// retried; AlreadyExists on Create is treated as success (another caller beat
+// us to it).
 func (m *Manager) applyRoute(route *unstructured.Unstructured) error {
+	const maxRetries = 3
 	name := route.GetName()
-	existing, getErr := m.getRoute(name)
-	if getErr == nil {
-		// Already exists — carry over the resourceVersion required for updates.
+
+	for attempt := range maxRetries {
+		existing, getErr := m.getRoute(name)
+		if getErr != nil && !errors.IsNotFound(getErr) {
+			return getErr
+		}
+
+		if errors.IsNotFound(getErr) {
+			// Route does not exist — try to create it.
+			_, createErr := m.client.Resource(httpRouteGVR).Namespace(m.namespace).Create(m.ctx, route, metav1.CreateOptions{})
+			if createErr == nil || errors.IsAlreadyExists(createErr) {
+				return nil // created, or a concurrent caller got there first
+			}
+			return createErr
+		}
+
+		// Route exists — update it, carrying over the required resourceVersion.
 		route.SetResourceVersion(existing.GetResourceVersion())
-		_, err := m.client.Resource(httpRouteGVR).Namespace(m.namespace).Update(m.ctx, route, metav1.UpdateOptions{})
-		return err
+		_, updateErr := m.client.Resource(httpRouteGVR).Namespace(m.namespace).Update(m.ctx, route, metav1.UpdateOptions{})
+		if updateErr == nil {
+			return nil
+		}
+		if errors.IsConflict(updateErr) && attempt < maxRetries-1 {
+			// resourceVersion changed between Get and Update; retry.
+			continue
+		}
+		return updateErr
 	}
-	if !errors.IsNotFound(getErr) {
-		return getErr
-	}
-	_, err := m.client.Resource(httpRouteGVR).Namespace(m.namespace).Create(m.ctx, route, metav1.CreateOptions{})
-	return err
+	return nil
 }
 
 // deleteRoute deletes the HTTPRoute with the given name.

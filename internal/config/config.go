@@ -67,8 +67,9 @@ func (c *HTTPRouteConfig) Validate() error {
 	if c.GatewayNamespace == "" {
 		missing = append(missing, "http-route.gateway-namespace")
 	}
-	// SelfService is only required when SHS integration is enabled.
-	if c.SHSService != "" && c.SelfService == "" {
+	// SelfService is always required: it names the root HTTPRoute's fallback
+	// backend and is used to derive the route name.
+	if c.SelfService == "" {
 		missing = append(missing, "self-service")
 	}
 	if len(missing) > 0 {

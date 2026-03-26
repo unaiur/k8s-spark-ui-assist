@@ -59,7 +59,7 @@ func Watch(ctx context.Context, client dynamic.Interface, namespace, serviceName
 		}
 	}
 
-	lw := newListerWatcher(client, namespace, serviceName)
+	lw := newListerWatcher(ctx, client, namespace, serviceName)
 
 	_, informer := cache.NewInformerWithOptions(cache.InformerOptions{
 		ListerWatcher: lw,
@@ -72,6 +72,11 @@ func Watch(ctx context.Context, client dynamic.Interface, namespace, serviceName
 				handleEndpoints(newObj)
 			},
 			DeleteFunc: func(obj interface{}) {
+				// client-go may deliver a DeletedFinalStateUnknown tombstone
+				// when the watch misses a delete event; unwrap it first.
+				if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+					obj = tombstone.Obj
+				}
 				// Endpoints object deleted means service gone → treat as down.
 				if ready {
 					ready = false
@@ -95,17 +100,19 @@ func Watch(ctx context.Context, client dynamic.Interface, namespace, serviceName
 
 // newListerWatcher returns a ListerWatcher scoped to the single Endpoints
 // object for serviceName in namespace (via a field selector on metadata.name).
-func newListerWatcher(client dynamic.Interface, namespace, serviceName string) cache.ListerWatcher {
+// ctx is used for all List and Watch calls so they are cancelled together with
+// the watcher.
+func newListerWatcher(ctx context.Context, client dynamic.Interface, namespace, serviceName string) cache.ListerWatcher {
 	fieldSel := fields.OneTermEqualSelector("metadata.name", serviceName).String()
 	rc := client.Resource(endpointsGVR).Namespace(namespace)
 	return &cache.ListWatch{
 		ListFunc: func(opts metav1.ListOptions) (runtime.Object, error) {
 			opts.FieldSelector = fieldSel
-			return rc.List(context.Background(), opts)
+			return rc.List(ctx, opts)
 		},
 		WatchFunc: func(opts metav1.ListOptions) (watch.Interface, error) {
 			opts.FieldSelector = fieldSel
-			return rc.Watch(context.Background(), opts)
+			return rc.Watch(ctx, opts)
 		},
 	}
 }
