@@ -14,11 +14,13 @@ spec:
   hostnames:
     - {{ include "k8s-spark-ui-assist.httpHostname" . | quote }}
   rules:
-    # Catch-all rule for the dashboard UI.
+    # Route /proxy to the dashboard UI.
+    # The "/" path is handled by the runtime-managed root HTTPRoute
+    # ("<selfService>-root-route"), created by the application on startup.
     - matches:
         - path:
             type: PathPrefix
-            value: /
+            value: /proxy
       backendRefs:
         - name: {{ include "k8s-spark-ui-assist.fullname" . }}
           port: {{ .Values.service.port }}
