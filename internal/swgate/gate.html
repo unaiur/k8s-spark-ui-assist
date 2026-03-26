@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Initialising…</title>
+  <style>
+    body { font-family: sans-serif; display: flex; align-items: center;
+           justify-content: center; height: 100vh; margin: 0; }
+    p { color: #555; }
+  </style>
+</head>
+<body>
+  <p>Initialising Spark UI assist…</p>
+  <script>
+  (async () => {
+    const params = new URLSearchParams(location.search);
+    // Validate that the return URL is a relative path (starts with /).
+    // The server also validates this, but be defensive in the client too.
+    let ret = params.get("return") || "/proxy/";
+    if (!/^\//.test(ret)) ret = "/proxy/";
+
+    if (!("serviceWorker" in navigator)) {
+      // No SW support — go directly to the target without injection support.
+      location.replace(ret);
+      return;
+    }
+
+    try {
+      await navigator.serviceWorker.register("/proxy/api/sw.js", { scope: "/" });
+      // Wait until a SW is controlling this page before redirecting, so the
+      // very first navigation after install is already intercepted.
+      if (!navigator.serviceWorker.controller) {
+        await new Promise((resolve) => {
+          navigator.serviceWorker.addEventListener("controllerchange", resolve, { once: true });
+        });
+      }
+    } catch (err) {
+      console.warn("SW registration failed:", err);
+    }
+
+    // The SW will add ?_sw=1 to the redirect navigation request, bypassing
+    // the gate on the next request.
+    location.replace(ret);
+  })();
+  </script>
+</body>
+</html>

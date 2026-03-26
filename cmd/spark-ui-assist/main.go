@@ -19,6 +19,7 @@ import (
 	"github.com/unaiur/k8s-spark-ui-assist/internal/server"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/shs"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/store"
+	"github.com/unaiur/k8s-spark-ui-assist/internal/swgate"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/watcher"
 )
 
@@ -66,8 +67,15 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	// SW gate endpoints — registered before /proxy/api/ so Go's longest-prefix
+	// routing picks these exact paths ahead of the generic API handler.
+	swCfg := swgate.Config{InjectScript: cfg.InjectScript}
+	swHandler := swgate.Handler(swCfg)
+	mux.Handle("/proxy/api/sw-gate", swHandler)
+	mux.Handle("/proxy/api/sw.js", swHandler)
+	mux.Handle("/proxy/api/spark-inject.js", swHandler)
 	mux.Handle("/proxy/api/", api.Handler(s, mgr))
-	mux.Handle("/", server.Handler(s, time.Now, mgr))
+	mux.Handle("/", swgate.GateMiddleware(swCfg, server.Handler(s, time.Now, mgr)))
 
 	srv := &http.Server{
 		Addr:    ":8080",

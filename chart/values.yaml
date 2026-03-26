@@ -10,6 +10,19 @@ httpGatewayNamespace: ""  # e.g. gateway-system
 # does not. When not set, the static HTTPRoute also claims "/" for the dashboard.
 shsService: ""
 
+# EXPERIMENTAL: JavaScript content to inject into Spark UI and Spark History
+# Server HTML pages via a Service Worker.
+# When set, the content is served verbatim at /proxy/api/spark-inject.js.
+# Visiting any dashboard page installs a SW that intercepts HTML responses on
+# /proxy/<appID>/* and SHS pages (/ and /history/*) and injects
+# <script src="/proxy/api/spark-inject.js" defer></script> before the first
+# <body> tag. /proxy/api/spark-inject.js then serves this content directly.
+# When not set, the SW is still installed (for future use) but no script is
+# injected and /proxy/api/spark-inject.js returns 404.
+# This parameter is temporary: once a built-in script is ready it will be
+# served directly by the service and this value will be removed.
+injectScript: ""
+
 # Container image.
 image:
   repository: ghcr.io/unaiur/k8s-spark-ui-assist

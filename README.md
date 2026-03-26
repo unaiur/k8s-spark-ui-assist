@@ -111,6 +111,7 @@ helm install spark-assist ./chart \
 | `httpGatewayName` | _(required)_ | Gateway name for all HTTPRoutes (`spec.parentRefs[0].name`) |
 | `httpGatewayNamespace` | _(required)_ | Gateway namespace for all HTTPRoutes (`spec.parentRefs[0].namespace`) |
 | `shsService` | `""` | Kubernetes Service name of the Spark History Server. When set, the root `/` HTTPRoute points to this service while it has ready pods, and falls back to the dashboard when it does not. |
+| `injectScript` | `""` | **(EXPERIMENTAL)** JavaScript content served verbatim at `/proxy/api/spark-inject.js`. When set, visiting the dashboard installs a SW that injects `<script src="/proxy/api/spark-inject.js" defer></script>` before the first `<body>` tag of driver UI pages (`/proxy/<appID>/*`) and SHS pages (`/` and `/history/*`). When empty, the SW is still installed but no script is injected and `/proxy/api/spark-inject.js` returns 404. This value is temporary and will be removed once a built-in script is available. |
 | `image.repository` | `ghcr.io/unaiur/k8s-spark-ui-assist` | Container image repository |
 | `image.tag` | chart `appVersion` | Image tag |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy |
@@ -151,6 +152,7 @@ The service falls back to your local `~/.kube/config` when it is not running ins
 | `-http-route.gateway-namespace` | _(required)_ | Gateway namespace for `spec.parentRefs[0].namespace` |
 | `-self-service` | _(required)_ | Kubernetes Service name for this application; used to name and build the fallback root HTTPRoute for `/` |
 | `-shs-service` | _(optional)_ | Kubernetes Service name of the Spark History Server. When set, the root `/` HTTPRoute is managed dynamically: pointing to SHS while it has ready pods, and to the dashboard otherwise |
+| `-inject-script` | _(optional)_ | **(EXPERIMENTAL)** JavaScript content to serve at `/proxy/api/spark-inject.js`. When set, a Service Worker is installed on first visit to the dashboard and injects `<script src="/proxy/api/spark-inject.js" defer></script>` into HTML responses on driver UI and SHS pages. When empty, the SW still installs but no script injection occurs. |
 
 All four `-http-route.*` and `-self-service` flags are required; the service exits immediately with an error
 listing the missing flags if any are omitted.
