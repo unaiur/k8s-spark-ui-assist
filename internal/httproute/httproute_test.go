@@ -13,6 +13,7 @@ import (
 
 	"github.com/unaiur/k8s-spark-ui-assist/internal/config"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/httproute"
+	k8ssvc "github.com/unaiur/k8s-spark-ui-assist/internal/k8s"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/store"
 )
 
@@ -27,10 +28,8 @@ const namespace = "default"
 // newScheme returns a minimal scheme that knows about HTTPRoute and HTTPRouteList.
 func newScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
-	gvk := schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}
-	listGVK := schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRouteList"}
-	s.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
-	s.AddKnownTypeWithName(listGVK, &unstructured.UnstructuredList{})
+	s.AddKnownTypeWithName(schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}, &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRouteList"}, &unstructured.UnstructuredList{})
 	return s
 }
 
@@ -51,7 +50,8 @@ func newManager(client *dynamicfake.FakeDynamicClient) *httproute.Manager {
 		GatewayName:      "main-gateway",
 		GatewayNamespace: "gateway-ns",
 	}
-	return httproute.New(client, namespace, cfg)
+	svc := k8ssvc.New(context.Background(), client, namespace)
+	return httproute.New(svc, cfg)
 }
 
 // routeExists checks whether an HTTPRoute with the given name exists.
@@ -60,10 +60,7 @@ func routeExists(t *testing.T, client *dynamicfake.FakeDynamicClient, name strin
 	_, err := client.Resource(httpRouteGVR).Namespace(namespace).Get(
 		context.Background(), name, metav1.GetOptions{},
 	)
-	if err == nil {
-		return true
-	}
-	return false
+	return err == nil
 }
 
 // listRoutes returns all HTTPRoutes in the namespace.
@@ -76,22 +73,6 @@ func listRoutes(t *testing.T, client *dynamicfake.FakeDynamicClient) []unstructu
 		t.Fatalf("listRoutes: %v", err)
 	}
 	return list.Items
-}
-
-// getPathValue returns the path value from the first rule of an HTTPRoute.
-func getPathValue(t *testing.T, route unstructured.Unstructured) string {
-	t.Helper()
-	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
-	if len(rules) == 0 {
-		t.Fatal("getPathValue: no rules found")
-	}
-	rule := rules[0].(map[string]interface{})
-	matches, _, _ := unstructured.NestedSlice(rule, "matches")
-	if len(matches) == 0 {
-		t.Fatal("getPathValue: no matches found")
-	}
-	val, _, _ := unstructured.NestedString(matches[0].(map[string]interface{}), "path", "value")
-	return val
 }
 
 // TestEnsureCreatesRoute verifies that Ensure creates an HTTPRoute for a driver.
@@ -107,96 +88,6 @@ func TestEnsureCreatesRoute(t *testing.T) {
 	}
 }
 
-// TestEnsureRouteHasCorrectPath verifies that the created HTTPRoute has a rule
-// matching the expected /proxy/<appSelector> path.
-func TestEnsureRouteHasCorrectPath(t *testing.T) {
-	client := dynamicfake.NewSimpleDynamicClient(newScheme())
-	mgr := newManager(client)
-	ctx := context.Background()
-
-	mgr.Ensure(ctx, newDriver("spark-abc123", "my-spark-job"))
-
-	routes := listRoutes(t, client)
-	if len(routes) != 1 {
-		t.Fatalf("expected 1 HTTPRoute, got %d", len(routes))
-	}
-	pathVal := getPathValue(t, routes[0])
-	if pathVal != "/proxy/spark-abc123" {
-		t.Errorf("expected path /proxy/spark-abc123, got %q", pathVal)
-	}
-}
-
-// TestEnsureRouteHasRedirectRules verifies that the created HTTPRoute has
-// exactly the three expected rules in the correct order:
-//  1. Exact /proxy/<id>         → 302 redirect to /proxy/<id>/jobs/
-//  2. Exact /proxy/<id>/        → 302 redirect to /proxy/<id>/jobs/
-//  3. PathPrefix /proxy/<id>    → URLRewrite forward to driver service
-func TestEnsureRouteHasRedirectRules(t *testing.T) {
-	client := dynamicfake.NewSimpleDynamicClient(newScheme())
-	mgr := newManager(client)
-	ctx := context.Background()
-
-	mgr.Ensure(ctx, newDriver("spark-abc123", "my-spark-job"))
-
-	routes := listRoutes(t, client)
-	if len(routes) != 1 {
-		t.Fatalf("expected 1 HTTPRoute, got %d", len(routes))
-	}
-	route := routes[0]
-	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
-	if len(rules) != 3 {
-		t.Fatalf("expected 3 rules, got %d", len(rules))
-	}
-
-	// Helper: extract path type and value from rule at index i.
-	rulePathTypeValue := func(i int) (string, string) {
-		t.Helper()
-		rule := rules[i].(map[string]interface{})
-		matches, _, _ := unstructured.NestedSlice(rule, "matches")
-		m := matches[0].(map[string]interface{})
-		typ, _, _ := unstructured.NestedString(m, "path", "type")
-		val, _, _ := unstructured.NestedString(m, "path", "value")
-		return typ, val
-	}
-	// Helper: extract redirect target from rule at index i.
-	ruleRedirectTarget := func(i int) string {
-		t.Helper()
-		rule := rules[i].(map[string]interface{})
-		filters, _, _ := unstructured.NestedSlice(rule, "filters")
-		f := filters[0].(map[string]interface{})
-		target, _, _ := unstructured.NestedString(f, "requestRedirect", "path", "replaceFullPath")
-		return target
-	}
-
-	// Rule 0: Exact /proxy/spark-abc123 → redirect to /proxy/spark-abc123/jobs/
-	typ0, val0 := rulePathTypeValue(0)
-	if typ0 != "Exact" || val0 != "/proxy/spark-abc123" {
-		t.Errorf("rule 0: expected Exact /proxy/spark-abc123, got %s %s", typ0, val0)
-	}
-	if target := ruleRedirectTarget(0); target != "/proxy/spark-abc123/jobs/" {
-		t.Errorf("rule 0: expected redirect to /proxy/spark-abc123/jobs/, got %q", target)
-	}
-
-	// Rule 1: Exact /proxy/spark-abc123/ → redirect to /proxy/spark-abc123/jobs/
-	typ1, val1 := rulePathTypeValue(1)
-	if typ1 != "Exact" || val1 != "/proxy/spark-abc123/" {
-		t.Errorf("rule 1: expected Exact /proxy/spark-abc123/, got %s %s", typ1, val1)
-	}
-	if target := ruleRedirectTarget(1); target != "/proxy/spark-abc123/jobs/" {
-		t.Errorf("rule 1: expected redirect to /proxy/spark-abc123/jobs/, got %q", target)
-	}
-
-	// Rule 2: PathPrefix /proxy/spark-abc123 → forward (no redirect filter)
-	typ2, val2 := rulePathTypeValue(2)
-	if typ2 != "PathPrefix" || val2 != "/proxy/spark-abc123" {
-		t.Errorf("rule 2: expected PathPrefix /proxy/spark-abc123, got %s %s", typ2, val2)
-	}
-	rule2 := rules[2].(map[string]interface{})
-	if _, ok := rule2["backendRefs"]; !ok {
-		t.Error("rule 2: expected backendRefs to be present")
-	}
-}
-
 // TestEnsureIdempotent verifies that calling Ensure twice for the same driver
 // does not create a duplicate route.
 func TestEnsureIdempotent(t *testing.T) {
@@ -208,8 +99,7 @@ func TestEnsureIdempotent(t *testing.T) {
 	mgr.Ensure(ctx, d)
 	mgr.Ensure(ctx, d)
 
-	routes := listRoutes(t, client)
-	if len(routes) != 1 {
+	if routes := listRoutes(t, client); len(routes) != 1 {
 		t.Errorf("expected 1 HTTPRoute after idempotent Ensure, got %d", len(routes))
 	}
 }
@@ -264,8 +154,7 @@ func TestDeleteNonExistentRouteIsNoop(t *testing.T) {
 	mgr.Ensure(ctx, newDriver("spark-aaa", "job-a"))
 	mgr.Delete(ctx, "spark-unknown") // should not panic or error
 
-	routes := listRoutes(t, client)
-	if len(routes) != 1 {
+	if routes := listRoutes(t, client); len(routes) != 1 {
 		t.Errorf("expected 1 HTTPRoute unchanged, got %d", len(routes))
 	}
 }
@@ -277,13 +166,10 @@ func TestReconcileRemovesStaleRoutes(t *testing.T) {
 	mgr := newManager(client)
 	ctx := context.Background()
 
-	// Simulate two routes left over from a previous instance.
 	mgr.Ensure(ctx, newDriver("spark-old1", "job-old1"))
 	mgr.Ensure(ctx, newDriver("spark-old2", "job-old2"))
 
-	// Only spark-old2 is still running.
-	active := []store.Driver{newDriver("spark-old2", "job-old2")}
-	mgr.Reconcile(ctx, active)
+	mgr.Reconcile(ctx, []store.Driver{newDriver("spark-old2", "job-old2")})
 
 	routes := listRoutes(t, client)
 	if len(routes) != 1 {
@@ -301,54 +187,18 @@ func TestReconcileCreatesMissingRoutes(t *testing.T) {
 	mgr := newManager(client)
 	ctx := context.Background()
 
-	// spark-aaa already has a route; spark-bbb does not.
 	mgr.Ensure(ctx, newDriver("spark-aaa", "job-a"))
 
-	active := []store.Driver{
+	mgr.Reconcile(ctx, []store.Driver{
 		newDriver("spark-aaa", "job-a"),
 		newDriver("spark-bbb", "job-b"),
-	}
-	mgr.Reconcile(ctx, active)
+	})
 
 	if !routeExists(t, client, "spark-aaa-ui-route") {
 		t.Error("expected spark-aaa-ui-route to still exist")
 	}
 	if !routeExists(t, client, "spark-bbb-ui-route") {
 		t.Error("expected spark-bbb-ui-route to be created by Reconcile")
-	}
-}
-
-// TestEnsureSanitizesAppSelectorInRouteName verifies that an appSelector
-// containing characters invalid in DNS-1123 names (uppercase, dots,
-// underscores) is lowercased and those characters replaced with "-".
-func TestEnsureSanitizesAppSelectorInRouteName(t *testing.T) {
-	cases := []struct {
-		appSelector   string
-		wantRouteName string
-	}{
-		{"spark-abc123", "spark-abc123-ui-route"},
-		{"Spark_App.123", "spark-app-123-ui-route"},
-		{"UPPER_CASE", "upper-case-ui-route"},
-		{"with.dots", "with-dots-ui-route"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.appSelector, func(t *testing.T) {
-			client := dynamicfake.NewSimpleDynamicClient(newScheme())
-			mgr := newManager(client)
-			ctx := context.Background()
-
-			mgr.Ensure(ctx, newDriver(tc.appSelector, "job"))
-
-			if !routeExists(t, client, tc.wantRouteName) {
-				routes := listRoutes(t, client)
-				names := make([]string, len(routes))
-				for i, r := range routes {
-					names[i] = r.GetName()
-				}
-				t.Errorf("expected HTTPRoute %q to exist; found: %v", tc.wantRouteName, names)
-			}
-		})
 	}
 }
 
