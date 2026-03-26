@@ -129,6 +129,50 @@ func TestHandlerDashboardServesPage(t *testing.T) {
 	}
 }
 
+// TestHandlerDashboardReasonTooltipPresent verifies that when a driver has a
+// non-empty Reason, the badge span carries a title="…" attribute.
+func TestHandlerDashboardReasonTooltipPresent(t *testing.T) {
+	s := newStore(store.Driver{
+		PodName:     "pod-r",
+		AppSelector: "spark-pending",
+		AppName:     "my-pending-job",
+		CreatedAt:   fixedNow().Add(-time.Minute),
+		State:       store.StatePending,
+		Reason:      "Cannot be scheduled",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/proxy/", nil)
+	rec := httptest.NewRecorder()
+	Handler(s, fixedNow).ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `title="Cannot be scheduled"`) {
+		t.Errorf("expected title attribute with reason in body, got:\n%s", body)
+	}
+}
+
+// TestHandlerDashboardReasonTooltipAbsent verifies that when Reason is empty,
+// no title="…" attribute is rendered on the badge span.
+func TestHandlerDashboardReasonTooltipAbsent(t *testing.T) {
+	s := newStore(store.Driver{
+		PodName:     "pod-r",
+		AppSelector: "spark-running",
+		AppName:     "my-running-job",
+		CreatedAt:   fixedNow().Add(-time.Minute),
+		State:       store.StateRunning,
+		Reason:      "",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/proxy/", nil)
+	rec := httptest.NewRecorder()
+	Handler(s, fixedNow).ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if strings.Contains(body, "title=") {
+		t.Errorf("expected no title attribute when Reason is empty, got:\n%s", body)
+	}
+}
+
 // TestHandlerNonProxyRedirects checks that any path other than "/proxy/" gets a
 // 302 redirect to "/proxy/".
 func TestHandlerNonProxyRedirects(t *testing.T) {

@@ -1,28 +1,72 @@
 // White-box tests for unexported watcher helpers.
 // Being in package watcher (not watcher_test) gives access to the private
-// functions isSparkDriver, isTerminated, stateFromPodPhase, and driverFromPod,
+// functions isSparkDriver, stateFromPodPhase, and driverFromPod,
 // and lets us exercise the cache.DeletedFinalStateUnknown tombstone path in
 // DeleteFunc without needing a real informer.
 package watcher
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/unaiur/k8s-spark-ui-assist/internal/labels"
 	"github.com/unaiur/k8s-spark-ui-assist/internal/store"
 )
+
+// ---- label selector helpers -------------------------------------------------
+
+func TestDriverSelector(t *testing.T) {
+	sel := driverSelector()
+
+	if !strings.Contains(sel, labelInstance+"="+instanceValue) {
+		t.Errorf("driverSelector() missing %s=%s: got %q",
+			labelInstance, instanceValue, sel)
+	}
+	if !strings.Contains(sel, labelRole+"="+roleValue) {
+		t.Errorf("driverSelector() missing %s=%s: got %q",
+			labelRole, roleValue, sel)
+	}
+}
+
+func TestDriverSelectorForApp(t *testing.T) {
+	const appID = "spark-abc123"
+	sel := driverSelectorForApp(appID)
+
+	if !strings.Contains(sel, driverSelector()) {
+		t.Errorf("driverSelectorForApp() does not contain base selector %q: got %q",
+			driverSelector(), sel)
+	}
+	if !strings.Contains(sel, labelSelector+"="+appID) {
+		t.Errorf("driverSelectorForApp() missing %s=%s: got %q",
+			labelSelector, appID, sel)
+	}
+}
+
+func TestDriverSelectorForAppDistinct(t *testing.T) {
+	s1 := driverSelectorForApp("app-one")
+	s2 := driverSelectorForApp("app-two")
+
+	if s1 == s2 {
+		t.Errorf("selectors for different appIDs should differ, both got %q", s1)
+	}
+	if strings.Contains(s1, "app-two") {
+		t.Errorf("selector for app-one should not mention app-two: %q", s1)
+	}
+	if strings.Contains(s2, "app-one") {
+		t.Errorf("selector for app-two should not mention app-one: %q", s2)
+	}
+}
 
 // ---- isSparkDriver ----------------------------------------------------------
 
 func TestIsSparkDriverTrue(t *testing.T) {
 	pod := &unstructured.Unstructured{}
 	pod.SetLabels(map[string]string{
-		labels.LabelInstance: labels.InstanceValue,
-		labels.LabelRole:     labels.RoleValue,
+		labelInstance: instanceValue,
+		labelRole:     roleValue,
 	})
 	if !isSparkDriver(pod) {
 		t.Error("expected isSparkDriver true for correctly labelled pod")
@@ -32,7 +76,7 @@ func TestIsSparkDriverTrue(t *testing.T) {
 func TestIsSparkDriverMissingRole(t *testing.T) {
 	pod := &unstructured.Unstructured{}
 	pod.SetLabels(map[string]string{
-		labels.LabelInstance: labels.InstanceValue,
+		labelInstance: instanceValue,
 		// no spark-role=driver
 	})
 	if isSparkDriver(pod) {
@@ -43,7 +87,7 @@ func TestIsSparkDriverMissingRole(t *testing.T) {
 func TestIsSparkDriverMissingInstance(t *testing.T) {
 	pod := &unstructured.Unstructured{}
 	pod.SetLabels(map[string]string{
-		labels.LabelRole: labels.RoleValue,
+		labelRole: roleValue,
 		// no app.kubernetes.io/instance=spark-job
 	})
 	if isSparkDriver(pod) {
@@ -58,70 +102,187 @@ func TestIsSparkDriverNoLabels(t *testing.T) {
 	}
 }
 
-// ---- isTerminated -----------------------------------------------------------
+// ---- stateAndReasonFromPod --------------------------------------------------
 
-func TestIsTerminatedSucceeded(t *testing.T) {
+// helper: build a minimal pod with a given phase and optional PodScheduled
+// condition and container status.
+func podWithPhase(phase string) *unstructured.Unstructured {
 	pod := &unstructured.Unstructured{Object: map[string]interface{}{}}
-	_ = unstructured.SetNestedField(pod.Object, "Succeeded", "status", "phase")
-	if !isTerminated(pod) {
-		t.Error("expected isTerminated true for Succeeded pod")
+	if phase != "" {
+		_ = unstructured.SetNestedField(pod.Object, phase, "status", "phase")
+	}
+	return pod
+}
+
+func setUnschedulableCondition(pod *unstructured.Unstructured) {
+	_ = unstructured.SetNestedSlice(pod.Object, []interface{}{
+		map[string]interface{}{
+			"type":   "PodScheduled",
+			"status": "False",
+			"reason": "Unschedulable",
+		},
+	}, "status", "conditions")
+}
+
+func setContainerWaiting(pod *unstructured.Unstructured, reason string) {
+	_ = unstructured.SetNestedSlice(pod.Object, []interface{}{
+		map[string]interface{}{
+			"name": "spark-kubernetes-driver",
+			"state": map[string]interface{}{
+				"waiting": map[string]interface{}{
+					"reason": reason,
+				},
+			},
+		},
+	}, "status", "containerStatuses")
+}
+
+func setContainerTerminated(pod *unstructured.Unstructured, reason string, exitCode int64) {
+	t := map[string]interface{}{"exitCode": exitCode}
+	if reason != "" {
+		t["reason"] = reason
+	}
+	_ = unstructured.SetNestedSlice(pod.Object, []interface{}{
+		map[string]interface{}{
+			"name":  "spark-kubernetes-driver",
+			"state": map[string]interface{}{"terminated": t},
+		},
+	}, "status", "containerStatuses")
+}
+
+func TestStateAndReasonRunning(t *testing.T) {
+	pod := podWithPhase("Running")
+	state, reason := stateAndReasonFromPod(pod)
+	if state != store.StateRunning {
+		t.Errorf("state: got %q, want Running", state)
+	}
+	if reason != "" {
+		t.Errorf("reason: got %q, want empty", reason)
 	}
 }
 
-func TestIsTerminatedFailed(t *testing.T) {
-	pod := &unstructured.Unstructured{Object: map[string]interface{}{}}
-	_ = unstructured.SetNestedField(pod.Object, "Failed", "status", "phase")
-	if !isTerminated(pod) {
-		t.Error("expected isTerminated true for Failed pod")
+func TestStateAndReasonPendingNoDetail(t *testing.T) {
+	pod := podWithPhase("Pending")
+	state, reason := stateAndReasonFromPod(pod)
+	if state != store.StatePending {
+		t.Errorf("state: got %q, want Pending", state)
+	}
+	if reason != "" {
+		t.Errorf("reason: got %q, want empty", reason)
 	}
 }
 
-func TestIsTerminatedRunning(t *testing.T) {
-	pod := &unstructured.Unstructured{Object: map[string]interface{}{}}
-	_ = unstructured.SetNestedField(pod.Object, "Running", "status", "phase")
-	if isTerminated(pod) {
-		t.Error("expected isTerminated false for Running pod")
+func TestStateAndReasonEmptyPhase(t *testing.T) {
+	pod := podWithPhase("")
+	state, reason := stateAndReasonFromPod(pod)
+	if state != store.StatePending {
+		t.Errorf("state: got %q, want Pending", state)
+	}
+	if reason != "" {
+		t.Errorf("reason: got %q, want empty", reason)
 	}
 }
 
-func TestIsTerminatedNoPhase(t *testing.T) {
-	pod := &unstructured.Unstructured{Object: map[string]interface{}{}}
-	if isTerminated(pod) {
-		t.Error("expected isTerminated false for pod with no phase")
+func TestStateAndReasonUnschedulable(t *testing.T) {
+	pod := podWithPhase("Pending")
+	setUnschedulableCondition(pod)
+	state, reason := stateAndReasonFromPod(pod)
+	if state != store.StatePending {
+		t.Errorf("state: got %q, want Pending", state)
+	}
+	if reason != "Cannot be scheduled" {
+		t.Errorf("reason: got %q, want %q", reason, "Cannot be scheduled")
 	}
 }
 
-// ---- stateFromPodPhase ------------------------------------------------------
-
-func TestStateFromPodPhaseRunning(t *testing.T) {
-	if got := stateFromPodPhase("Running"); got != store.StateRunning {
-		t.Errorf("got %q, want %q", got, store.StateRunning)
+func TestStateAndReasonPendingContainerCreating(t *testing.T) {
+	pod := podWithPhase("Pending")
+	setContainerWaiting(pod, "ContainerCreating")
+	state, reason := stateAndReasonFromPod(pod)
+	if state != store.StatePending {
+		t.Errorf("state: got %q, want Pending", state)
+	}
+	if reason != "Creating the container" {
+		t.Errorf("reason: got %q, want %q", reason, "Creating the container")
 	}
 }
 
-func TestStateFromPodPhasePending(t *testing.T) {
-	if got := stateFromPodPhase("Pending"); got != store.StatePending {
-		t.Errorf("got %q, want %q", got, store.StatePending)
+func TestStateAndReasonPendingCrashLoop(t *testing.T) {
+	pod := podWithPhase("Pending")
+	setContainerWaiting(pod, "CrashLoopBackOff")
+	state, reason := stateAndReasonFromPod(pod)
+	if state != store.StatePending {
+		t.Errorf("state: got %q, want Pending", state)
+	}
+	if reason != "Container keeps crashing" {
+		t.Errorf("reason: got %q, want %q", reason, "Container keeps crashing")
 	}
 }
 
-func TestStateFromPodPhaseEmpty(t *testing.T) {
-	// Empty phase (pod just admitted, no status yet) is treated as Pending.
-	if got := stateFromPodPhase(""); got != store.StatePending {
-		t.Errorf("got %q, want %q", got, store.StatePending)
+func TestStateAndReasonPendingUnknownWaitingReason(t *testing.T) {
+	// Unrecognised waiting reason passes through as-is.
+	pod := podWithPhase("Pending")
+	setContainerWaiting(pod, "SomeFutureReason")
+	_, reason := stateAndReasonFromPod(pod)
+	if reason != "SomeFutureReason" {
+		t.Errorf("reason: got %q, want %q", reason, "SomeFutureReason")
 	}
 }
 
-func TestStateFromPodPhaseUnknown(t *testing.T) {
-	if got := stateFromPodPhase("Unknown"); got != store.StateUnknown {
-		t.Errorf("got %q, want %q", got, store.StateUnknown)
+func TestStateAndReasonUnschedulableTakesPriorityOverWaiting(t *testing.T) {
+	// Condition check has priority over container waiting reason.
+	pod := podWithPhase("Pending")
+	setUnschedulableCondition(pod)
+	setContainerWaiting(pod, "ContainerCreating")
+	_, reason := stateAndReasonFromPod(pod)
+	if reason != "Cannot be scheduled" {
+		t.Errorf("reason: got %q, want %q", reason, "Cannot be scheduled")
 	}
 }
 
-func TestStateFromPodPhaseUnrecognised(t *testing.T) {
-	// Any unrecognised phase maps to StateUnknown.
-	if got := stateFromPodPhase("SomeFuturePhase"); got != store.StateUnknown {
-		t.Errorf("got %q, want %q", got, store.StateUnknown)
+func TestStateAndReasonSucceededNoContainerStatus(t *testing.T) {
+	pod := podWithPhase("Succeeded")
+	state, reason := stateAndReasonFromPod(pod)
+	if state != store.StateSucceeded {
+		t.Errorf("state: got %q, want Succeeded", state)
+	}
+	if reason != "" {
+		t.Errorf("reason: got %q, want empty", reason)
+	}
+}
+
+func TestStateAndReasonFailedOOMKilled(t *testing.T) {
+	pod := podWithPhase("Failed")
+	setContainerTerminated(pod, "OOMKilled", 137)
+	state, reason := stateAndReasonFromPod(pod)
+	if state != store.StateFailed {
+		t.Errorf("state: got %q, want Failed", state)
+	}
+	if reason != "Out of memory" {
+		t.Errorf("reason: got %q, want %q", reason, "Out of memory")
+	}
+}
+
+func TestStateAndReasonFailedNoReason(t *testing.T) {
+	pod := podWithPhase("Failed")
+	setContainerTerminated(pod, "", 1)
+	state, reason := stateAndReasonFromPod(pod)
+	if state != store.StateFailed {
+		t.Errorf("state: got %q, want Failed", state)
+	}
+	if reason != "" {
+		t.Errorf("reason: got %q, want empty", reason)
+	}
+}
+
+func TestStateAndReasonUnknownPhase(t *testing.T) {
+	pod := podWithPhase("SomeFuturePhase")
+	state, reason := stateAndReasonFromPod(pod)
+	if state != store.StateUnknown {
+		t.Errorf("state: got %q, want Unknown", state)
+	}
+	if reason != "" {
+		t.Errorf("reason: got %q, want empty", reason)
 	}
 }
 
@@ -133,8 +294,8 @@ func TestDriverFromPod(t *testing.T) {
 	pod.SetName("my-pod")
 	pod.SetCreationTimestamp(metav1.NewTime(ts))
 	pod.SetLabels(map[string]string{
-		labels.LabelSelector: "spark-abc",
-		labels.LabelAppName:  "my-app",
+		labelSelector: "spark-abc",
+		labelAppName:  "my-app",
 	})
 	_ = unstructured.SetNestedField(pod.Object, "Running", "status", "phase")
 

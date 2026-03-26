@@ -1,4 +1,4 @@
-// Package store maintains an in-memory thread-safe list of running Spark driver pods.
+// Package store maintains an in-memory thread-safe list of Spark driver pods.
 package store
 
 import (
@@ -21,6 +21,10 @@ const (
 	// StateRunning means the pod has been bound to a node and the container
 	// is running. Only Running drivers get an HTTPRoute.
 	StateRunning DriverState = "Running"
+	// StateSucceeded means the pod completed successfully (all containers exited 0).
+	StateSucceeded DriverState = "Succeeded"
+	// StateFailed means the pod terminated with a non-zero exit code or error.
+	StateFailed DriverState = "Failed"
 	// StateUnknown means the pod phase could not be determined (e.g. the node
 	// is unreachable). The pod is tracked in the store but no HTTPRoute is created.
 	StateUnknown DriverState = "Unknown"
@@ -39,6 +43,10 @@ type Driver struct {
 	// State is the current lifecycle phase of the driver pod as observed by
 	// the watcher. Only StateRunning drivers have an HTTPRoute.
 	State DriverState
+	// Reason is a human-readable string that elaborates on State when extra
+	// detail is available (e.g. "Cannot pull the image", "Cannot be scheduled").
+	// It is empty when no additional detail is known.
+	Reason string
 }
 
 // invalidDNSChars matches any character that is not allowed in a DNS-1123 label.
@@ -121,4 +129,17 @@ func (s *Store) ListRunning() []Driver {
 	}
 	s.mu.RUnlock()
 	return out
+}
+
+// FindBySelector returns the Driver whose AppSelector matches appID.
+// The second return value is false if no such driver is in the store.
+func (s *Store) FindBySelector(appID string) (Driver, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, d := range s.drivers {
+		if d.AppSelector == appID {
+			return d, true
+		}
+	}
+	return Driver{}, false
 }

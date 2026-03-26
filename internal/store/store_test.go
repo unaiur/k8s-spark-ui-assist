@@ -79,6 +79,8 @@ func TestListRunning(t *testing.T) {
 	s.Add(Driver{PodName: "pod-running", AppSelector: "sel-1", State: StateRunning})
 	s.Add(Driver{PodName: "pod-pending", AppSelector: "sel-2", State: StatePending})
 	s.Add(Driver{PodName: "pod-unknown", AppSelector: "sel-3", State: StateUnknown})
+	s.Add(Driver{PodName: "pod-succeeded", AppSelector: "sel-4", State: StateSucceeded})
+	s.Add(Driver{PodName: "pod-failed", AppSelector: "sel-5", State: StateFailed})
 
 	running := s.ListRunning()
 	if len(running) != 1 {
@@ -136,5 +138,43 @@ func TestRouteNameTruncation(t *testing.T) {
 	const suffix = "-ui-route"
 	if !strings.HasSuffix(name, suffix) {
 		t.Errorf("route name does not end with %q: %q", suffix, name)
+	}
+}
+
+func TestFindBySelectorFound(t *testing.T) {
+	s := New()
+	s.Add(Driver{PodName: "pod-1", AppSelector: "spark-abc", State: StateRunning, Reason: "some reason"})
+	s.Add(Driver{PodName: "pod-2", AppSelector: "spark-xyz", State: StatePending})
+
+	d, ok := s.FindBySelector("spark-abc")
+	if !ok {
+		t.Fatal("expected to find driver with AppSelector spark-abc")
+	}
+	if d.PodName != "pod-1" {
+		t.Errorf("expected PodName pod-1, got %q", d.PodName)
+	}
+	if d.State != StateRunning {
+		t.Errorf("expected State Running, got %q", d.State)
+	}
+	if d.Reason != "some reason" {
+		t.Errorf("expected Reason %q, got %q", "some reason", d.Reason)
+	}
+}
+
+func TestFindBySelectorNotFound(t *testing.T) {
+	s := New()
+	s.Add(Driver{PodName: "pod-1", AppSelector: "spark-abc"})
+
+	_, ok := s.FindBySelector("spark-unknown")
+	if ok {
+		t.Error("expected FindBySelector to return false for unknown appID")
+	}
+}
+
+func TestFindBySelectorEmpty(t *testing.T) {
+	s := New()
+	_, ok := s.FindBySelector("spark-any")
+	if ok {
+		t.Error("expected FindBySelector to return false on empty store")
 	}
 }

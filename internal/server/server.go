@@ -29,9 +29,11 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
     font-weight: bold;
     color: #fff;
   }
-  .badge-running  { background: #2e7d32; }
-  .badge-pending  { background: #757575; }
-  .badge-unknown  { background: #e65100; }
+  .badge-running       { background: #2e7d32; }
+  .badge-pending       { background: #757575; }
+  .badge-unknown       { background: #e65100; }
+  .badge-succeeded     { background: #1565c0; }
+  .badge-failed        { background: #b71c1c; }
 </style>
 </head>
 <body>
@@ -44,7 +46,7 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
   {{- range .}}
   <tr>
     <td>{{if .URL}}<a href="{{.URL}}">{{.AppName}}</a>{{else}}{{.AppName}}{{end}}</td>
-    <td><span class="badge badge-{{.StateClass}}">{{.State}}</span></td>
+    <td><span class="badge badge-{{.StateClass}}"{{if .Reason}} title="{{.Reason}}"{{end}}>{{.State}}</span></td>
     <td>{{.Duration}}</td>
   </tr>
   {{- end}}
@@ -63,6 +65,7 @@ type driverView struct {
 	AppName    string
 	State      store.DriverState
 	StateClass string
+	Reason     string
 	Duration   string
 }
 
@@ -92,14 +95,18 @@ func Handler(s *store.Store, now func() time.Time) http.Handler {
 		views := make([]driverView, 0, len(drivers))
 		for _, d := range drivers {
 			var url template.URL
-			if d.State == store.StateRunning {
+			switch d.State {
+			case store.StateRunning:
 				url = template.URL(driverPathPrefix + d.AppSelector + "/jobs/")
+			case store.StateSucceeded, store.StateFailed:
+				url = template.URL("/history/" + d.AppSelector + "/jobs/")
 			}
 			views = append(views, driverView{
 				URL:        url,
 				AppName:    d.AppName,
 				State:      d.State,
 				StateClass: stateClass(d.State),
+				Reason:     d.Reason,
 				Duration:   FormatDuration(current.Sub(d.CreatedAt)),
 			})
 		}
@@ -118,6 +125,10 @@ func stateClass(s store.DriverState) string {
 		return "running"
 	case store.StatePending:
 		return "pending"
+	case store.StateSucceeded:
+		return "succeeded"
+	case store.StateFailed:
+		return "failed"
 	default:
 		return "unknown"
 	}
