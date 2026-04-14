@@ -29,6 +29,7 @@ var testCfg = config.HTTPRouteConfig{
 	Hostname:         "spark.example.com",
 	GatewayName:      "main-gateway",
 	GatewayNamespace: "gateway-ns",
+	GatewayPort:      443,
 	SelfService:      "spark-ui-assist",
 }
 
@@ -314,6 +315,7 @@ var testCfgSHS = config.HTTPRouteConfig{
 	Hostname:         "spark.example.com",
 	GatewayName:      "main-gateway",
 	GatewayNamespace: "gateway-ns",
+	GatewayPort:      443,
 	SelfService:      "spark-ui-assist",
 	SHSService:       "spark-history-server",
 }
@@ -531,7 +533,7 @@ func TestCreateRouteHasCorrectStructure(t *testing.T) {
 		t.Errorf("expected hostname %q, got %v", testCfg.Hostname, hostnames)
 	}
 
-	// Gateway parentRef name
+	// Gateway parentRef name and port
 	parentRefs, _, _ := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
 	if len(parentRefs) == 0 {
 		t.Fatal("expected parentRefs, got none")
@@ -539,6 +541,10 @@ func TestCreateRouteHasCorrectStructure(t *testing.T) {
 	gwName, _, _ := unstructured.NestedString(parentRefs[0].(map[string]interface{}), "name")
 	if gwName != testCfg.GatewayName {
 		t.Errorf("expected gateway %q, got %q", testCfg.GatewayName, gwName)
+	}
+	gwPort, _, _ := unstructured.NestedInt64(parentRefs[0].(map[string]interface{}), "port")
+	if gwPort != int64(testCfg.GatewayPort) {
+		t.Errorf("expected gateway port %d, got %d", testCfg.GatewayPort, gwPort)
 	}
 
 	// Three rules
@@ -565,5 +571,37 @@ func TestCreateRouteHasCorrectStructure(t *testing.T) {
 	backendName, _, _ := unstructured.NestedString(backends[0].(map[string]interface{}), "name")
 	if backendName != "my-spark-job-ui-svc" {
 		t.Errorf("rule 2: expected backend my-spark-job-ui-svc, got %q", backendName)
+	}
+}
+
+// TestCreateRouteOmitsPortWhenZero verifies that when GatewayPort is 0,
+// the port field is absent from parentRefs (not set to 0).
+func TestCreateRouteOmitsPortWhenZero(t *testing.T) {
+	cfgNoPort := config.HTTPRouteConfig{
+		Hostname:         "spark.example.com",
+		GatewayName:      "main-gateway",
+		GatewayNamespace: "gateway-ns",
+		GatewayPort:      0, // explicitly zero → omit
+		SelfService:      "spark-ui-assist",
+	}
+	client := dynamicfake.NewSimpleDynamicClient(newScheme())
+	mgr := httproute.New(context.Background(), client, namespace, cfgNoPort)
+	ctx := context.Background()
+	d := newDriver("spark-xyz", "my-job")
+
+	mgr.Ensure(ctx, d)
+
+	route, err := client.Resource(httpRouteGVR).Namespace(namespace).Get(ctx, d.RouteName(), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get route: %v", err)
+	}
+
+	parentRefs, _, _ := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
+	if len(parentRefs) == 0 {
+		t.Fatal("expected parentRefs")
+	}
+	ref := parentRefs[0].(map[string]interface{})
+	if _, ok := ref["port"]; ok {
+		t.Errorf("expected port to be absent when GatewayPort=0, but it was present: %v", ref["port"])
 	}
 }

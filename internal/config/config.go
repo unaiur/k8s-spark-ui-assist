@@ -23,6 +23,10 @@ type HTTPRouteConfig struct {
 	Hostname         string
 	GatewayName      string
 	GatewayNamespace string
+	// GatewayPort is the port set in HTTPRoute spec.parentRefs[0].port.
+	// It must match the Gateway listener port (typically 443 for HTTPS).
+	// When zero the port field is omitted from parentRefs.
+	GatewayPort int
 	// SelfService is the name of the Kubernetes Service for this application.
 	// It is used to build the root HTTPRoute when SHS is not available.
 	SelfService string
@@ -41,6 +45,7 @@ func Parse() *Config {
 	flag.StringVar(&cfg.HTTPRoute.Hostname, "http-route.hostname", "", "Hostname to set in HTTPRoute spec.hostnames[0]")
 	flag.StringVar(&cfg.HTTPRoute.GatewayName, "http-route.gateway-name", "", "Gateway name for HTTPRoute spec.parentRefs[0].name")
 	flag.StringVar(&cfg.HTTPRoute.GatewayNamespace, "http-route.gateway-namespace", "", "Gateway namespace for HTTPRoute spec.parentRefs[0].namespace")
+	flag.IntVar(&cfg.HTTPRoute.GatewayPort, "http-route.gateway-port", 443, "Gateway listener port for HTTPRoute spec.parentRefs[0].port (0 to omit)")
 	flag.StringVar(&cfg.HTTPRoute.SelfService, "self-service", "", "Kubernetes Service name for this application (used to build root HTTPRoute)")
 	flag.StringVar(&cfg.HTTPRoute.SHSService, "shs-service", "", "Kubernetes Service name for the Spark History Server (optional)")
 

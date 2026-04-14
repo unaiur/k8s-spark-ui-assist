@@ -38,6 +38,7 @@ spec:
             - -http-route.hostname={{ include "k8s-spark-ui-assist.httpHostname" . }}
             - -http-route.gateway-name={{ include "k8s-spark-ui-assist.httpGatewayName" . }}
             - -http-route.gateway-namespace={{ include "k8s-spark-ui-assist.httpGatewayNamespace" . }}
+            - -http-route.gateway-port={{ .Values.httpGatewayPort }}
             - -self-service={{ include "k8s-spark-ui-assist.fullname" . }}
             {{- if .Values.shsService }}
             - -shs-service={{ .Values.shsService }}

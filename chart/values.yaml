@@ -3,6 +3,9 @@
 httpHostname: ""          # e.g. spark.example.com
 httpGatewayName: ""       # e.g. main-gateway
 httpGatewayNamespace: ""  # e.g. gateway-system
+# Port of the Gateway listener. Must match the port set in the Gateway's
+# listener (typically 443 for HTTPS). Set to 0 to omit the port field.
+httpGatewayPort: 443
 
 # Optional: Kubernetes Service name of the Spark History Server.
 # When set, a managed HTTPRoute for "/" is created pointing to this service
