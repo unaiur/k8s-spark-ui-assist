@@ -308,6 +308,20 @@ func (m *Manager) Reconcile(ctx context.Context, active []store.Driver) error {
 
 // ---- HTTPRoute build helpers -------------------------------------------------
 
+// gatewayParentRef builds the parentRefs entry for the configured Gateway.
+// When cfg.GatewayPort is non-zero the port field is included so that
+// admission webhooks (e.g. Kyverno) that require an explicit port are satisfied.
+func gatewayParentRef(cfg config.HTTPRouteConfig) map[string]interface{} {
+	ref := map[string]interface{}{
+		"name":      cfg.GatewayName,
+		"namespace": cfg.GatewayNamespace,
+	}
+	if cfg.GatewayPort != 0 {
+		ref["port"] = int64(cfg.GatewayPort)
+	}
+	return ref
+}
+
 func buildDriverRoute(d store.Driver, cfg config.HTTPRouteConfig, namespace string) *unstructured.Unstructured {
 	pathPrefix := driverPathPrefix + d.AppSelector
 	jobsRedirectTarget := pathPrefix + "/jobs/"
@@ -352,10 +366,7 @@ func buildDriverRoute(d store.Driver, cfg config.HTTPRouteConfig, namespace stri
 			},
 			"spec": map[string]interface{}{
 				"parentRefs": []interface{}{
-					map[string]interface{}{
-						"name":      cfg.GatewayName,
-						"namespace": cfg.GatewayNamespace,
-					},
+					gatewayParentRef(cfg),
 				},
 				"hostnames": []interface{}{cfg.Hostname},
 				"rules": []interface{}{
@@ -410,10 +421,7 @@ func buildRootRoute(name string, cfg config.HTTPRouteConfig, namespace, backendS
 			},
 			"spec": map[string]interface{}{
 				"parentRefs": []interface{}{
-					map[string]interface{}{
-						"name":      cfg.GatewayName,
-						"namespace": cfg.GatewayNamespace,
-					},
+					gatewayParentRef(cfg),
 				},
 				"hostnames": []interface{}{cfg.Hostname},
 				"rules": []interface{}{

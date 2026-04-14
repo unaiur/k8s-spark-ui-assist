@@ -113,6 +113,7 @@ helm install spark-assist ./chart \
 | `httpHostname` | _(required)_ | Hostname for the service HTTPRoute and all Spark driver HTTPRoutes (`spec.hostnames[0]`) |
 | `httpGatewayName` | _(required)_ | Gateway name for all HTTPRoutes (`spec.parentRefs[0].name`) |
 | `httpGatewayNamespace` | _(required)_ | Gateway namespace for all HTTPRoutes (`spec.parentRefs[0].namespace`) |
+| `httpGatewayPort` | `443` | Gateway listener port for all HTTPRoutes (`spec.parentRefs[0].port`). Set to `0` to omit the port field. |
 | `shsService` | `""` | Kubernetes Service name of the Spark History Server. When set, the root `/` HTTPRoute points to this service while it has ready pods, and falls back to the dashboard when it does not. |
 | `image.repository` | `ghcr.io/unaiur/k8s-spark-ui-assist` | Container image repository |
 | `image.tag` | chart `appVersion` | Image tag |
@@ -157,6 +158,7 @@ The service falls back to your local `~/.kube/config` when it is not running ins
 | `-http-route.hostname` | _(required)_ | Hostname placed in `spec.hostnames[0]` |
 | `-http-route.gateway-name` | _(required)_ | Gateway name for `spec.parentRefs[0].name` |
 | `-http-route.gateway-namespace` | _(required)_ | Gateway namespace for `spec.parentRefs[0].namespace` |
+| `-http-route.gateway-port` | `443` | Gateway listener port for `spec.parentRefs[0].port`. Set to `0` to omit the port field. |
 | `-self-service` | _(required)_ | Kubernetes Service name for this application; used to name and build the fallback root HTTPRoute for `/` |
 | `-shs-service` | _(optional)_ | Kubernetes Service name of the Spark History Server. When set, the root `/` HTTPRoute is managed dynamically: pointing to SHS while it has ready pods, and to the dashboard otherwise |
 
