@@ -51,67 +51,13 @@ type Handler interface {
 // onSynced, if non-nil, is called once after the initial EndpointSlice state
 // has been processed (mirroring the watcher.Watch convention).
 func Watch(ctx context.Context, client dynamic.Interface, namespace, serviceName string, h Handler, onSynced func()) {
-	// sliceReady tracks ready-endpoint counts per EndpointSlice by name so
-	// that we can correctly aggregate across multiple slices.
-	sliceReady := map[string]int{}
-	wasReady := false
-
-	totalReady := func() int {
-		n := 0
-		for _, c := range sliceReady {
-			n += c
-		}
-		return n
-	}
-
-	handleSlice := func(obj interface{}) {
-		ep, ok := obj.(*unstructured.Unstructured)
-		if !ok {
-			return
-		}
-		name := ep.GetName()
-		sliceReady[name] = readyEndpointCount(ep)
-		n := totalReady()
-		isReady := n > 0
-		if isReady && !wasReady {
-			wasReady = true
-			log.Printf("shs: service %s has %d ready endpoint(s) — up", serviceName, n)
-			h.OnUp()
-		} else if !isReady && wasReady {
-			wasReady = false
-			log.Printf("shs: service %s has no ready endpoints — down", serviceName)
-			h.OnDown()
-		}
-	}
-
-	deleteSlice := func(obj interface{}) {
-		// client-go may deliver a DeletedFinalStateUnknown tombstone
-		// when the watch misses a delete event; unwrap it first.
-		if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
-			obj = tombstone.Obj
-		}
-		ep, ok := obj.(*unstructured.Unstructured)
-		if !ok {
-			return
-		}
-		delete(sliceReady, ep.GetName())
-		if wasReady && totalReady() == 0 {
-			wasReady = false
-			log.Printf("shs: endpointslice for %s deleted — down", serviceName)
-			h.OnDown()
-		}
-	}
-
 	lw := newListerWatcher(ctx, client, namespace, serviceName)
+	handler := newEventHandler(serviceName, h)
 
 	_, informer := cache.NewInformerWithOptions(cache.InformerOptions{
 		ListerWatcher: lw,
 		ObjectType:    &unstructured.Unstructured{},
-		Handler: cache.ResourceEventHandlerFuncs{
-			AddFunc:    func(obj interface{}) { handleSlice(obj) },
-			UpdateFunc: func(_, newObj interface{}) { handleSlice(newObj) },
-			DeleteFunc: deleteSlice,
-		},
+		Handler:       handler,
 	})
 
 	if onSynced != nil {
@@ -123,6 +69,79 @@ func Watch(ctx context.Context, client dynamic.Interface, namespace, serviceName
 	}
 
 	informer.Run(ctx.Done())
+}
+
+// sliceState tracks per-slice ready-endpoint counts and fires OnUp/OnDown
+// transitions on the provided Handler. It is extracted from Watch so it can
+// be unit-tested independently.
+type sliceState struct {
+	serviceName string
+	handler     Handler
+	counts      map[string]int // EndpointSlice name → ready count
+	wasReady    bool
+}
+
+func newSliceState(serviceName string, h Handler) *sliceState {
+	return &sliceState{
+		serviceName: serviceName,
+		handler:     h,
+		counts:      map[string]int{},
+	}
+}
+
+func (s *sliceState) totalReady() int {
+	n := 0
+	for _, c := range s.counts {
+		n += c
+	}
+	return n
+}
+
+func (s *sliceState) handleSlice(obj interface{}) {
+	ep, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return
+	}
+	s.counts[ep.GetName()] = readyEndpointCount(ep)
+	n := s.totalReady()
+	isReady := n > 0
+	if isReady && !s.wasReady {
+		s.wasReady = true
+		log.Printf("shs: service %s has %d ready endpoint(s) — up", s.serviceName, n)
+		s.handler.OnUp()
+	} else if !isReady && s.wasReady {
+		s.wasReady = false
+		log.Printf("shs: service %s has no ready endpoints — down", s.serviceName)
+		s.handler.OnDown()
+	}
+}
+
+func (s *sliceState) deleteSlice(obj interface{}) {
+	// client-go may deliver a DeletedFinalStateUnknown tombstone
+	// when the watch misses a delete event; unwrap it first.
+	if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		obj = tombstone.Obj
+	}
+	ep, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return
+	}
+	delete(s.counts, ep.GetName())
+	if s.wasReady && s.totalReady() == 0 {
+		s.wasReady = false
+		log.Printf("shs: endpointslice for %s deleted — down", s.serviceName)
+		s.handler.OnDown()
+	}
+}
+
+// newEventHandler builds the cache.ResourceEventHandlerFuncs for the informer.
+func newEventHandler(serviceName string, h Handler) cache.ResourceEventHandlerFuncs {
+	s := newSliceState(serviceName, h)
+	return cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(obj interface{}) { s.handleSlice(obj) },
+		UpdateFunc: func(_, newObj interface{}) { s.handleSlice(newObj) },
+		DeleteFunc: s.deleteSlice,
+	}
 }
 
 // newListerWatcher returns a ListerWatcher scoped to the EndpointSlices that

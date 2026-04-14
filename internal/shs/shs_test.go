@@ -192,6 +192,41 @@ func TestWatchFiresOnDownAfterUpdate(t *testing.T) {
 	})
 }
 
+// TestWatchFiresOnDownAfterDelete creates an EndpointSlice with ready endpoints,
+// then deletes it and verifies the OnDown transition fires.
+func TestWatchFiresOnDownAfterDelete(t *testing.T) {
+	ep := buildEndpointSlice("shs-slice-abc", "spark-history-server", 1)
+	client := dynamicfake.NewSimpleDynamicClient(newScheme(), ep)
+
+	h := &recordingHandler{}
+	synced := make(chan struct{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		shs.Watch(ctx, client, namespace, "spark-history-server", h, func() { close(synced) })
+	}()
+
+	<-synced
+	waitFor(t, func() bool {
+		events := h.Events()
+		return len(events) >= 1 && events[0] == "up"
+	})
+
+	err := client.Resource(endpointSliceGVR).Namespace(namespace).Delete(
+		context.Background(), ep.GetName(), metav1.DeleteOptions{},
+	)
+	if err != nil {
+		t.Fatalf("Delete EndpointSlice: %v", err)
+	}
+
+	waitFor(t, func() bool {
+		events := h.Events()
+		return len(events) >= 2 && events[1] == "down"
+	})
+}
+
 // TestWatchAggregatesMultipleSlices verifies that multiple EndpointSlices for
 // the same service are aggregated: OnDown fires only when ALL slices have zero
 // ready endpoints.
