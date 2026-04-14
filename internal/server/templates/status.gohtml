@@ -10,6 +10,7 @@
   body { font-family: sans-serif; margin: 2em; }
   .message { font-size: 1.1em; margin: 1em 0; }
   a { color: #1565c0; }
+  #countdown { font-weight: bold; }
 </style>
 </head>
 <body>
@@ -19,7 +20,17 @@
 <p><a href="{{.HistoryURL}}">View in Spark History Server</a></p>
 {{- end}}
 {{- if .RefreshSeconds}}
-<p>This page will refresh in {{.RefreshSeconds}} seconds.</p>
+<p>This page will refresh in <span id="countdown">{{.RefreshSeconds}}</span> seconds.</p>
+<script>
+(function () {
+  var el = document.getElementById("countdown");
+  var remaining = {{.RefreshSeconds}};
+  var interval = setInterval(function () {
+    remaining -= 1;
+    el.textContent = remaining;
+  }, 1000);
+})();
+</script>
 {{- end}}
 <p><a href="/proxy/">Back to dashboard</a></p>
 </body>

@@ -236,6 +236,9 @@ func TestProxyStatusPendingShowsMessageAndRefresh(t *testing.T) {
 	if !strings.Contains(body, `content="10"`) {
 		t.Errorf("expected 10-second refresh meta tag, got:\n%s", body)
 	}
+	if !strings.Contains(body, `id="countdown"`) {
+		t.Errorf("expected countdown span in body, got:\n%s", body)
+	}
 }
 
 // TestProxyStatusPendingWithReasonIncludesReason verifies that the reason is
@@ -284,6 +287,9 @@ func TestProxyStatusRunningTriggersEnsureAndRefresh(t *testing.T) {
 	}
 	if !strings.Contains(body, `content="5"`) {
 		t.Errorf("expected 5-second refresh meta tag, got:\n%s", body)
+	}
+	if !strings.Contains(body, `id="countdown"`) {
+		t.Errorf("expected countdown span in body, got:\n%s", body)
 	}
 	if len(ensurer.ensured) != 1 || ensurer.ensured[0].AppSelector != "spark-abc" {
 		t.Errorf("expected Ensure called once for spark-abc, got %v", ensurer.ensured)
