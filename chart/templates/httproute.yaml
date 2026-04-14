@@ -10,7 +10,9 @@ spec:
   parentRefs:
     - name: {{ include "k8s-spark-ui-assist.httpGatewayName" . }}
       namespace: {{ include "k8s-spark-ui-assist.httpGatewayNamespace" . }}
+      {{- if .Values.httpGatewayPort }}
       port: {{ .Values.httpGatewayPort }}
+      {{- end }}
   hostnames:
     - {{ include "k8s-spark-ui-assist.httpHostname" . | quote }}
   rules:

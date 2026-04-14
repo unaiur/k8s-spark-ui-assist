@@ -12,6 +12,7 @@ func fullConfig() HTTPRouteConfig {
 		Hostname:         "spark.example.com",
 		GatewayName:      "main-gw",
 		GatewayNamespace: "gateway-ns",
+		GatewayPort:      443,
 		SelfService:      "spark-ui-assist",
 	}
 }
@@ -73,6 +74,41 @@ func TestValidate(t *testing.T) {
 			},
 			wantErr: true,
 			wantMsg: "self-service",
+		},
+		{
+			name: "gateway-port zero — valid (omit port)",
+			cfg: HTTPRouteConfig{
+				Hostname:         "spark.example.com",
+				GatewayName:      "main-gw",
+				GatewayNamespace: "gateway-ns",
+				GatewayPort:      0,
+				SelfService:      "spark-ui-assist",
+			},
+			wantErr: false,
+		},
+		{
+			name: "gateway-port negative — invalid",
+			cfg: HTTPRouteConfig{
+				Hostname:         "spark.example.com",
+				GatewayName:      "main-gw",
+				GatewayNamespace: "gateway-ns",
+				GatewayPort:      -1,
+				SelfService:      "spark-ui-assist",
+			},
+			wantErr: true,
+			wantMsg: "http-route.gateway-port",
+		},
+		{
+			name: "gateway-port too large — invalid",
+			cfg: HTTPRouteConfig{
+				Hostname:         "spark.example.com",
+				GatewayName:      "main-gw",
+				GatewayNamespace: "gateway-ns",
+				GatewayPort:      65536,
+				SelfService:      "spark-ui-assist",
+			},
+			wantErr: true,
+			wantMsg: "http-route.gateway-port",
 		},
 	}
 

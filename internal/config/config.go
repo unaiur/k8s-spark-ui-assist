@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -79,6 +80,9 @@ func (c *HTTPRouteConfig) Validate() error {
 	}
 	if len(missing) > 0 {
 		return errors.New("missing required flags: " + strings.Join(missing, ", "))
+	}
+	if c.GatewayPort < 0 || c.GatewayPort > 65535 {
+		return fmt.Errorf("http-route.gateway-port must be 0 (omit) or a valid port (1-65535), got %d", c.GatewayPort)
 	}
 	return nil
 }

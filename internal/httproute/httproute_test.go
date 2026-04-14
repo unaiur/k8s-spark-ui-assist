@@ -542,7 +542,13 @@ func TestCreateRouteHasCorrectStructure(t *testing.T) {
 	if gwName != testCfg.GatewayName {
 		t.Errorf("expected gateway %q, got %q", testCfg.GatewayName, gwName)
 	}
-	gwPort, _, _ := unstructured.NestedInt64(parentRefs[0].(map[string]interface{}), "port")
+	gwPort, found, err := unstructured.NestedInt64(parentRefs[0].(map[string]interface{}), "port")
+	if err != nil {
+		t.Fatalf("expected gateway port to be a valid int64: %v", err)
+	}
+	if !found {
+		t.Fatal("expected gateway port, got none")
+	}
 	if gwPort != int64(testCfg.GatewayPort) {
 		t.Errorf("expected gateway port %d, got %d", testCfg.GatewayPort, gwPort)
 	}
