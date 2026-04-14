@@ -99,6 +99,20 @@ func TestIsSparkDriverMissingSelector(t *testing.T) {
 	}
 }
 
+func TestIsSparkDriverEmptySelector(t *testing.T) {
+	// An empty spark-app-selector is not a valid Spark application identifier;
+	// it would produce broken route names and URL path segments. Such pods must
+	// not be treated as Spark drivers.
+	pod := &unstructured.Unstructured{}
+	pod.SetLabels(map[string]string{
+		labelSelector: "", // present but empty
+		labelRole:     roleValue,
+	})
+	if isSparkDriver(pod) {
+		t.Error("expected isSparkDriver false when spark-app-selector is present but empty")
+	}
+}
+
 func TestIsSparkDriverInstanceLabelIgnored(t *testing.T) {
 	// app.kubernetes.io/instance is the Helm release label and must not be
 	// used to identify Spark drivers. A pod with spark-app-selector and
