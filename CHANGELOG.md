@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.2](https://github.com/unaiur/k8s-spark-ui-assist/compare/v2.0.1...v2.0.2) (2026-04-14)
+
+
+### Bug Fixes
+
+* set parentRefs[0].port on all managed HTTPRoutes ([#42](https://github.com/unaiur/k8s-spark-ui-assist/issues/42)) ([1c61edb](https://github.com/unaiur/k8s-spark-ui-assist/commit/1c61edb84ffda0f87bb03eb7c20d1fbc6884cdbe))
+* watch EndpointSlices instead of deprecated Endpoints for SHS availability ([#40](https://github.com/unaiur/k8s-spark-ui-assist/issues/40)) ([1c93306](https://github.com/unaiur/k8s-spark-ui-assist/commit/1c933061150e1ff76c3162d3ec2594aebb8ae0d6))
+
 ## [2.0.1](https://github.com/unaiur/k8s-spark-ui-assist/compare/v2.0.0...v2.0.1) (2026-04-14)
 
 
