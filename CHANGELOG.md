@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0](https://github.com/unaiur/k8s-spark-ui-assist/compare/v2.0.2...v2.1.0) (2026-04-14)
+
+
+### Features
+
+* JS countdown on status page before auto-refresh ([#43](https://github.com/unaiur/k8s-spark-ui-assist/issues/43)) ([d501076](https://github.com/unaiur/k8s-spark-ui-assist/commit/d5010763bc9df5456f8dbfc46f58190304d3bd2f))
+
 ## [2.0.2](https://github.com/unaiur/k8s-spark-ui-assist/compare/v2.0.1...v2.0.2) (2026-04-14)
 
 
