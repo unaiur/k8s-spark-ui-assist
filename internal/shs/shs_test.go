@@ -15,41 +15,54 @@ import (
 	"github.com/unaiur/k8s-spark-ui-assist/internal/shs"
 )
 
-var endpointsGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "endpoints"}
+var endpointSliceGVR = schema.GroupVersionResource{
+	Group:    "discovery.k8s.io",
+	Version:  "v1",
+	Resource: "endpointslices",
+}
 
-const namespace = "default"
+const (
+	namespace        = "default"
+	serviceNameLabel = "kubernetes.io/service-name"
+)
 
 func newScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
-	s.AddKnownTypeWithName(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Endpoints"}, &unstructured.Unstructured{})
-	s.AddKnownTypeWithName(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "EndpointsList"}, &unstructured.UnstructuredList{})
+	s.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "discovery.k8s.io", Version: "v1", Kind: "EndpointSlice"},
+		&unstructured.Unstructured{},
+	)
+	s.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "discovery.k8s.io", Version: "v1", Kind: "EndpointSliceList"},
+		&unstructured.UnstructuredList{},
+	)
 	return s
 }
 
-// buildEndpoints constructs a fake Endpoints object with the given number of
-// ready addresses in a single subset.
-func buildEndpoints(name string, readyCount int) *unstructured.Unstructured {
-	addresses := make([]interface{}, readyCount)
-	for i := range addresses {
-		addresses[i] = map[string]interface{}{"ip": "10.0.0.1"}
-	}
-	subsets := []interface{}{}
-	if readyCount > 0 {
-		subsets = []interface{}{
-			map[string]interface{}{
-				"addresses": addresses,
+// buildEndpointSlice constructs a fake EndpointSlice for serviceName with the
+// given number of ready endpoints.
+func buildEndpointSlice(name, serviceName string, readyCount int) *unstructured.Unstructured {
+	endpoints := make([]interface{}, readyCount)
+	for i := range endpoints {
+		endpoints[i] = map[string]interface{}{
+			"addresses": []interface{}{"10.0.0.1"},
+			"conditions": map[string]interface{}{
+				"ready": true,
 			},
 		}
 	}
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "v1",
-			"kind":       "Endpoints",
+			"apiVersion": "discovery.k8s.io/v1",
+			"kind":       "EndpointSlice",
 			"metadata": map[string]interface{}{
 				"name":      name,
 				"namespace": namespace,
+				"labels": map[string]interface{}{
+					serviceNameLabel: serviceName,
+				},
 			},
-			"subsets": subsets,
+			"endpoints": endpoints,
 		},
 	}
 }
@@ -93,10 +106,10 @@ func waitFor(t *testing.T, f func() bool) {
 	t.Fatal("timed out waiting for condition")
 }
 
-// TestWatchFiresOnUpWhenReadyAddressesPresent starts the watcher with an
-// Endpoints object that already has ready addresses and verifies OnUp is called.
-func TestWatchFiresOnUpWhenReadyAddressesPresent(t *testing.T) {
-	ep := buildEndpoints("spark-history-server", 2)
+// TestWatchFiresOnUpWhenReadyEndpointsPresent starts the watcher with an
+// EndpointSlice that already has ready endpoints and verifies OnUp is called.
+func TestWatchFiresOnUpWhenReadyEndpointsPresent(t *testing.T) {
+	ep := buildEndpointSlice("shs-slice-abc", "spark-history-server", 2)
 	client := dynamicfake.NewSimpleDynamicClient(newScheme(), ep)
 
 	h := &recordingHandler{}
@@ -116,10 +129,10 @@ func TestWatchFiresOnUpWhenReadyAddressesPresent(t *testing.T) {
 	})
 }
 
-// TestWatchFiresOnDownWhenNoReadyAddresses starts the watcher with an Endpoints
-// object that has no ready addresses and verifies no OnUp is called.
-func TestWatchFiresOnDownWhenNoReadyAddresses(t *testing.T) {
-	ep := buildEndpoints("spark-history-server", 0)
+// TestWatchFiresNoEventWhenNoReadyEndpoints starts the watcher with an
+// EndpointSlice that has no ready endpoints and verifies no events are fired.
+func TestWatchFiresNoEventWhenNoReadyEndpoints(t *testing.T) {
+	ep := buildEndpointSlice("shs-slice-abc", "spark-history-server", 0)
 	client := dynamicfake.NewSimpleDynamicClient(newScheme(), ep)
 
 	h := &recordingHandler{}
@@ -136,14 +149,14 @@ func TestWatchFiresOnDownWhenNoReadyAddresses(t *testing.T) {
 	// Give a short time for any spurious calls to arrive.
 	time.Sleep(50 * time.Millisecond)
 	if events := h.Events(); len(events) != 0 {
-		t.Errorf("expected no events for zero-ready-address Endpoints, got %v", events)
+		t.Errorf("expected no events for zero-ready-endpoint EndpointSlice, got %v", events)
 	}
 }
 
-// TestWatchFiresOnDownAfterUpdate creates an Endpoints with ready addresses,
+// TestWatchFiresOnDownAfterUpdate creates an EndpointSlice with ready endpoints,
 // then updates it to have none and verifies the OnDown transition fires.
 func TestWatchFiresOnDownAfterUpdate(t *testing.T) {
-	ep := buildEndpoints("spark-history-server", 1)
+	ep := buildEndpointSlice("shs-slice-abc", "spark-history-server", 1)
 	client := dynamicfake.NewSimpleDynamicClient(newScheme(), ep)
 
 	h := &recordingHandler{}
@@ -163,16 +176,68 @@ func TestWatchFiresOnDownAfterUpdate(t *testing.T) {
 		return len(events) >= 1 && events[0] == "up"
 	})
 
-	// Update the Endpoints to have no ready addresses.
-	epDown := buildEndpoints("spark-history-server", 0)
+	// Update the EndpointSlice to have no ready endpoints.
+	epDown := buildEndpointSlice("shs-slice-abc", "spark-history-server", 0)
 	epDown.SetResourceVersion(ep.GetResourceVersion())
-	_, err := client.Resource(endpointsGVR).Namespace(namespace).Update(
+	_, err := client.Resource(endpointSliceGVR).Namespace(namespace).Update(
 		context.Background(), epDown, metav1.UpdateOptions{},
 	)
 	if err != nil {
-		t.Fatalf("Update endpoints: %v", err)
+		t.Fatalf("Update EndpointSlice: %v", err)
 	}
 
+	waitFor(t, func() bool {
+		events := h.Events()
+		return len(events) >= 2 && events[1] == "down"
+	})
+}
+
+// TestWatchAggregatesMultipleSlices verifies that multiple EndpointSlices for
+// the same service are aggregated: OnDown fires only when ALL slices have zero
+// ready endpoints.
+func TestWatchAggregatesMultipleSlices(t *testing.T) {
+	ep1 := buildEndpointSlice("shs-slice-1", "spark-history-server", 1)
+	ep2 := buildEndpointSlice("shs-slice-2", "spark-history-server", 1)
+	client := dynamicfake.NewSimpleDynamicClient(newScheme(), ep1, ep2)
+
+	h := &recordingHandler{}
+	synced := make(chan struct{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		shs.Watch(ctx, client, namespace, "spark-history-server", h, func() { close(synced) })
+	}()
+
+	<-synced
+	waitFor(t, func() bool {
+		return len(h.Events()) >= 1 && h.Events()[0] == "up"
+	})
+
+	// Drain ep1 — service still up via ep2.
+	ep1Down := buildEndpointSlice("shs-slice-1", "spark-history-server", 0)
+	ep1Down.SetResourceVersion(ep1.GetResourceVersion())
+	_, err := client.Resource(endpointSliceGVR).Namespace(namespace).Update(
+		context.Background(), ep1Down, metav1.UpdateOptions{},
+	)
+	if err != nil {
+		t.Fatalf("Update ep1: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if events := h.Events(); len(events) != 1 {
+		t.Errorf("expected still only 1 event (up) after draining ep1, got %v", events)
+	}
+
+	// Drain ep2 — now truly down.
+	ep2Down := buildEndpointSlice("shs-slice-2", "spark-history-server", 0)
+	ep2Down.SetResourceVersion(ep2.GetResourceVersion())
+	_, err = client.Resource(endpointSliceGVR).Namespace(namespace).Update(
+		context.Background(), ep2Down, metav1.UpdateOptions{},
+	)
+	if err != nil {
+		t.Fatalf("Update ep2: %v", err)
+	}
 	waitFor(t, func() bool {
 		events := h.Events()
 		return len(events) >= 2 && events[1] == "down"

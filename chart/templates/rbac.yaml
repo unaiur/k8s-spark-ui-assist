@@ -10,9 +10,11 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["list", "watch"]
-  # Watch the Spark History Server Endpoints to detect availability changes.
-  - apiGroups: [""]
-    resources: ["endpoints"]
+  # Watch the Spark History Server EndpointSlices to detect availability changes.
+  # core/v1 Endpoints is deprecated in Kubernetes v1.33+; EndpointSlice is the
+  # replacement and avoids deprecation warnings from the API server.
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
     verbs: ["list", "watch"]
   # Manage per-driver HTTPRoutes: create on driver start, delete on driver end,
   # list to reconcile stale routes on startup, get to check existence,
