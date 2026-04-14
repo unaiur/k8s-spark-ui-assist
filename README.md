@@ -121,6 +121,11 @@ helm install spark-assist ./chart \
 | `serviceAccount.name` | release fullname | Override the ServiceAccount name |
 | `serviceAccount.annotations` | `{}` | Extra annotations (e.g. for IRSA / Workload Identity) |
 
+The chart automatically creates a ServiceAccount (named after `serviceAccount.name`) and
+binds it to a Role with the exact permissions the service needs (`list`/`watch` pods and
+endpoints, `get`/`list`/`create`/`update`/`delete` HTTPRoutes). No manual RBAC setup is
+required when deploying via Helm.
+
 ### In-cluster without Helm
 
 Deploy the service in the same namespace as your Spark jobs. It auto-detects the namespace
