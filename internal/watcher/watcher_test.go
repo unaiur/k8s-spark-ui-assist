@@ -39,10 +39,9 @@ func driverPod(name, appID string) *unstructured.Unstructured {
 				"name":      name,
 				"namespace": "default",
 				"labels": map[string]interface{}{
-					"app.kubernetes.io/instance": "spark-job",
-					"spark-role":                 "driver",
-					"spark-app-selector":         appID,
-					"spark-app-name":             "my-job",
+					"spark-role":         "driver",
+					"spark-app-selector": appID,
+					"spark-app-name":     "my-job",
 				},
 			},
 			"status": map[string]interface{}{},
@@ -82,7 +81,8 @@ func failedPod(name, appID string) *unstructured.Unstructured {
 	return pod
 }
 
-// nonDriverPod returns a pod that lacks the spark-role=driver label.
+// nonDriverPod returns a pod that lacks both spark-role=driver and
+// spark-app-selector, so it must not be recognised as a Spark driver.
 func nonDriverPod(name string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -92,8 +92,7 @@ func nonDriverPod(name string) *unstructured.Unstructured {
 				"name":      name,
 				"namespace": "default",
 				"labels": map[string]interface{}{
-					"app.kubernetes.io/instance": "spark-job",
-					// no spark-role=driver
+					"app.kubernetes.io/instance": "some-helm-release",
 				},
 			},
 			"status": map[string]interface{}{},
@@ -259,7 +258,7 @@ func TestWatchAddsDriverToStore(t *testing.T) {
 }
 
 // TestWatchIgnoresNonDriverPods verifies that pods without spark-role=driver
-// are not added to the store.
+// and spark-app-selector are not added to the store.
 func TestWatchIgnoresNonDriverPods(t *testing.T) {
 	s, h := runWatch(t, nonDriverPod("executor-1"))
 

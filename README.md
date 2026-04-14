@@ -63,8 +63,11 @@ Spark driver pods must carry these two labels for the service to recognise them:
 
 | Label | Value |
 |---|---|
-| `app.kubernetes.io/instance` | `spark-job` |
 | `spark-role` | `driver` |
+| `spark-app-selector` | _(any non-empty value)_ |
+
+`spark-app-selector` is set automatically by the Spark Kubernetes scheduler on every
+driver pod; its value uniquely identifies the application within the cluster.
 
 The following labels are read for display purposes:
 

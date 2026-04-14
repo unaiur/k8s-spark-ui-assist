@@ -21,13 +21,17 @@ import (
 func TestDriverSelector(t *testing.T) {
 	sel := driverSelector()
 
-	if !strings.Contains(sel, labelInstance+"="+instanceValue) {
-		t.Errorf("driverSelector() missing %s=%s: got %q",
-			labelInstance, instanceValue, sel)
-	}
 	if !strings.Contains(sel, labelRole+"="+roleValue) {
 		t.Errorf("driverSelector() missing %s=%s: got %q",
 			labelRole, roleValue, sel)
+	}
+	// Must require spark-app-selector to be present (any value).
+	if !strings.Contains(sel, labelSelector) {
+		t.Errorf("driverSelector() missing %s key: got %q", labelSelector, sel)
+	}
+	// Must NOT reference app.kubernetes.io/instance.
+	if strings.Contains(sel, "app.kubernetes.io/instance") {
+		t.Errorf("driverSelector() must not reference app.kubernetes.io/instance: got %q", sel)
 	}
 }
 
@@ -65,7 +69,7 @@ func TestDriverSelectorForAppDistinct(t *testing.T) {
 func TestIsSparkDriverTrue(t *testing.T) {
 	pod := &unstructured.Unstructured{}
 	pod.SetLabels(map[string]string{
-		labelInstance: instanceValue,
+		labelSelector: "spark-abc",
 		labelRole:     roleValue,
 	})
 	if !isSparkDriver(pod) {
@@ -76,7 +80,7 @@ func TestIsSparkDriverTrue(t *testing.T) {
 func TestIsSparkDriverMissingRole(t *testing.T) {
 	pod := &unstructured.Unstructured{}
 	pod.SetLabels(map[string]string{
-		labelInstance: instanceValue,
+		labelSelector: "spark-abc",
 		// no spark-role=driver
 	})
 	if isSparkDriver(pod) {
@@ -84,14 +88,49 @@ func TestIsSparkDriverMissingRole(t *testing.T) {
 	}
 }
 
-func TestIsSparkDriverMissingInstance(t *testing.T) {
+func TestIsSparkDriverMissingSelector(t *testing.T) {
 	pod := &unstructured.Unstructured{}
 	pod.SetLabels(map[string]string{
 		labelRole: roleValue,
-		// no app.kubernetes.io/instance=spark-job
+		// no spark-app-selector
 	})
 	if isSparkDriver(pod) {
-		t.Error("expected isSparkDriver false when instance label is absent")
+		t.Error("expected isSparkDriver false when spark-app-selector label is absent")
+	}
+}
+
+func TestIsSparkDriverEmptySelector(t *testing.T) {
+	// An empty spark-app-selector is not a valid Spark application identifier;
+	// it would produce broken route names and URL path segments. Such pods must
+	// not be treated as Spark drivers.
+	pod := &unstructured.Unstructured{}
+	pod.SetLabels(map[string]string{
+		labelSelector: "", // present but empty
+		labelRole:     roleValue,
+	})
+	if isSparkDriver(pod) {
+		t.Error("expected isSparkDriver false when spark-app-selector is present but empty")
+	}
+}
+
+func TestIsSparkDriverInstanceLabelIgnored(t *testing.T) {
+	// app.kubernetes.io/instance is the Helm release label and must not be
+	// used to identify Spark drivers. A pod with spark-app-selector and
+	// spark-role=driver must be recognised regardless of whether
+	// app.kubernetes.io/instance is present or what its value is.
+	for _, instanceVal := range []string{"", "spark-job", "some-helm-release"} {
+		pod := &unstructured.Unstructured{}
+		labels := map[string]string{
+			labelSelector: "spark-abc",
+			labelRole:     roleValue,
+		}
+		if instanceVal != "" {
+			labels["app.kubernetes.io/instance"] = instanceVal
+		}
+		pod.SetLabels(labels)
+		if !isSparkDriver(pod) {
+			t.Errorf("expected isSparkDriver true regardless of app.kubernetes.io/instance=%q", instanceVal)
+		}
 	}
 }
 

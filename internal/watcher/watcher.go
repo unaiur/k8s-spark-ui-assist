@@ -22,25 +22,28 @@ var podGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "po
 // ---- label constants --------------------------------------------------------
 
 const (
-	labelInstance = "app.kubernetes.io/instance"
 	labelRole     = "spark-role"
 	labelSelector = "spark-app-selector"
 	labelAppName  = "spark-app-name"
 
-	instanceValue = "spark-job"
-	roleValue     = "driver"
+	roleValue = "driver"
 )
 
 // driverSelector returns the label selector string that matches all Spark
-// driver pods managed by this operator.
+// driver pods. A pod is a Spark driver when it carries spark-role=driver and
+// has a non-empty spark-app-selector label. The selector only checks for key
+// presence; the non-empty requirement is enforced by isSparkDriver.
+// app.kubernetes.io/instance is intentionally excluded: that label holds the
+// Helm release name, not a Spark-specific marker, and its value varies across
+// deployments.
 func driverSelector() string {
-	return labelInstance + "=" + instanceValue + "," + labelRole + "=" + roleValue
+	return labelRole + "=" + roleValue + "," + labelSelector
 }
 
 // driverSelectorForApp returns the label selector string that matches the
 // driver pod for a specific Spark application identified by appSelector.
 func driverSelectorForApp(appSelector string) string {
-	return driverSelector() + "," + labelSelector + "=" + appSelector
+	return labelRole + "=" + roleValue + "," + labelSelector + "=" + appSelector
 }
 
 // Handler is called when a Spark driver pod is added or removed.
@@ -150,7 +153,8 @@ func NewListerWatcher(namespace string, client dynamic.Interface) cache.ListerWa
 
 func isSparkDriver(pod *unstructured.Unstructured) bool {
 	podLabels := pod.GetLabels()
-	return podLabels[labelInstance] == instanceValue && podLabels[labelRole] == roleValue
+	selectorVal := podLabels[labelSelector]
+	return selectorVal != "" && podLabels[labelRole] == roleValue
 }
 
 // humanReason maps Kubernetes container-state reason strings to human-readable
