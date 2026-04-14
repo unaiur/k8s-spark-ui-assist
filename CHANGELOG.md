@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/unaiur/k8s-spark-ui-assist/compare/v2.0.0...v2.0.1) (2026-04-14)
+
+
+### Bug Fixes
+
+* identify Spark driver pods by spark-app-selector + spark-role labels ([#37](https://github.com/unaiur/k8s-spark-ui-assist/issues/37)) ([b074c9a](https://github.com/unaiur/k8s-spark-ui-assist/commit/b074c9a10b687f73723f60c1b7c1e259d0de8f9e))
+
 ## [2.0.0](https://github.com/unaiur/k8s-spark-ui-assist/compare/v1.5.1...v2.0.0) (2026-03-26)
 
 
