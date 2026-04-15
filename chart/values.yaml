@@ -10,6 +10,13 @@ httpGatewayNamespace: ""  # e.g. gateway-system
 # does not. When not set, the static HTTPRoute also claims "/" for the dashboard.
 shsService: ""
 
+# Optional: Kubernetes Deployment name for the Spark History Server.
+# When set (and shsService is set), the wake endpoint patches this Deployment
+# to scale up from zero when a user clicks the "Start Spark History Server" link.
+# Defaults to shsService when not set (i.e. the Service and Deployment share the
+# same name, which is the common case).
+shsDeployment: ""
+
 # Container image.
 image:
   repository: ghcr.io/unaiur/k8s-spark-ui-assist

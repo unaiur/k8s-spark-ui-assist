@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Starting Spark History Server</title>
+<meta http-equiv="refresh" content="{{.RefreshSeconds}}">
+<style>
+  body { font-family: sans-serif; margin: 2em; }
+  .message { font-size: 1.1em; margin: 1em 0; }
+  a { color: #1565c0; }
+  #countdown { font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>Starting Spark History Server&hellip;</h1>
+<p class="message">The Spark History Server is waking up. This page will redirect automatically.</p>
+<p>Checking again in <span id="countdown">{{.RefreshSeconds}}</span> second(s)&hellip;</p>
+<p><a href="/proxy/">Back to dashboard</a></p>
+<script>
+(function() {
+  var n = {{.RefreshSeconds}};
+  var el = document.getElementById('countdown');
+  if (!el) return;
+  setInterval(function() {
+    if (n > 1) { n--; el.textContent = n; }
+  }, 1000);
+})();
+</script>
+</body>
+</html>

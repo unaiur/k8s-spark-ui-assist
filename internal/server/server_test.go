@@ -8,6 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
+
 	"github.com/unaiur/k8s-spark-ui-assist/internal/store"
 )
 
@@ -55,6 +63,20 @@ func (e *recordingEnsurer) Ensure(_ context.Context, d store.Driver) {
 	e.ensured = append(e.ensured, d)
 }
 
+// staticSHSState is a test-only SHSState that returns a fixed value.
+type staticSHSState struct{ up bool }
+
+func (s *staticSHSState) IsUp() bool { return s.up }
+
+// newFakeDynClient returns a fake dynamic client that has the apps/v1 Deployment scheme registered.
+func newFakeDynClient(objs ...runtime.Object) dynamic.Interface {
+	scheme := runtime.NewScheme()
+	// Register the apps/v1 Deployment GVK so the fake client can handle it.
+	scheme.AddKnownTypeWithName(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}, &unstructured.Unstructured{})
+	scheme.AddKnownTypeWithName(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "DeploymentList"}, &unstructured.UnstructuredList{})
+	return fake.NewSimpleDynamicClient(scheme, objs...)
+}
+
 // ---- Dashboard tests --------------------------------------------------------
 
 // TestHandlerDashboardRunningDriver checks that a Running driver gets a link
@@ -70,7 +92,7 @@ func TestHandlerDashboardRunningDriver(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/", nil)
 	rec := httptest.NewRecorder()
-	Handler(s, fixedNow, nil).ServeHTTP(rec, req)
+	Handler(s, fixedNow, nil, SHSConfig{}).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK, got %d", rec.Code)
@@ -100,7 +122,7 @@ func TestHandlerDashboardPendingDriver(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/", nil)
 	rec := httptest.NewRecorder()
-	Handler(s, fixedNow, nil).ServeHTTP(rec, req)
+	Handler(s, fixedNow, nil, SHSConfig{}).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK, got %d", rec.Code)
@@ -134,7 +156,7 @@ func TestHandlerDashboardServesPage(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/", nil)
 	rec := httptest.NewRecorder()
-	Handler(s, fixedNow, nil).ServeHTTP(rec, req)
+	Handler(s, fixedNow, nil, SHSConfig{}).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK, got %d", rec.Code)
@@ -159,7 +181,7 @@ func TestHandlerDashboardReasonTooltipPresent(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/", nil)
 	rec := httptest.NewRecorder()
-	Handler(s, fixedNow, nil).ServeHTTP(rec, req)
+	Handler(s, fixedNow, nil, SHSConfig{}).ServeHTTP(rec, req)
 
 	body := rec.Body.String()
 	if !strings.Contains(body, `title="Cannot be scheduled"`) {
@@ -181,7 +203,7 @@ func TestHandlerDashboardReasonTooltipAbsent(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/", nil)
 	rec := httptest.NewRecorder()
-	Handler(s, fixedNow, nil).ServeHTTP(rec, req)
+	Handler(s, fixedNow, nil, SHSConfig{}).ServeHTTP(rec, req)
 
 	body := rec.Body.String()
 	if strings.Contains(body, "title=") {
@@ -198,7 +220,7 @@ func TestHandlerNonProxyRedirects(t *testing.T) {
 	for _, path := range paths {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
-		Handler(s, fixedNow, nil).ServeHTTP(rec, req)
+		Handler(s, fixedNow, nil, SHSConfig{}).ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusFound {
 			t.Errorf("path %q: expected 302, got %d", path, rec.Code)
@@ -206,6 +228,63 @@ func TestHandlerNonProxyRedirects(t *testing.T) {
 		if loc := rec.Header().Get("Location"); loc != "/proxy/" {
 			t.Errorf("path %q: expected Location: /proxy/, got %q", path, loc)
 		}
+	}
+}
+
+// ---- Dashboard SHS button tests ---------------------------------------------
+
+// TestDashboardSHSButtonAbsentWhenNotConfigured verifies no SHS link is shown
+// when SHSConfig has no Deployment set.
+func TestDashboardSHSButtonAbsentWhenNotConfigured(t *testing.T) {
+	s := newStore()
+	req := httptest.NewRequest(http.MethodGet, "/proxy/", nil)
+	rec := httptest.NewRecorder()
+	Handler(s, fixedNow, nil, SHSConfig{}).ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if strings.Contains(body, "Spark History Server") {
+		t.Errorf("expected no SHS link when SHSConfig is empty, got:\n%s", body)
+	}
+}
+
+// TestDashboardSHSButtonLinksToRootWhenUp verifies the SHS link goes to "/"
+// when SHS is up.
+func TestDashboardSHSButtonLinksToRootWhenUp(t *testing.T) {
+	s := newStore()
+	shsCfg := SHSConfig{
+		Deployment: "spark-history",
+		Namespace:  "default",
+		State:      &staticSHSState{up: true},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/proxy/", nil)
+	rec := httptest.NewRecorder()
+	Handler(s, fixedNow, nil, shsCfg).ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `href="/"`) {
+		t.Errorf("expected SHS link to / when SHS is up, got:\n%s", body)
+	}
+	if !strings.Contains(body, "Spark History Server") {
+		t.Errorf("expected 'Spark History Server' text in body, got:\n%s", body)
+	}
+}
+
+// TestDashboardSHSButtonLinksToWakeWhenDown verifies the SHS link goes to the
+// wake endpoint when SHS is down.
+func TestDashboardSHSButtonLinksToWakeWhenDown(t *testing.T) {
+	s := newStore()
+	shsCfg := SHSConfig{
+		Deployment: "spark-history",
+		Namespace:  "default",
+		State:      &staticSHSState{up: false},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/proxy/", nil)
+	rec := httptest.NewRecorder()
+	Handler(s, fixedNow, nil, shsCfg).ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, wakePath) {
+		t.Errorf("expected wake path %q in SHS link when SHS is down, got:\n%s", wakePath, body)
 	}
 }
 
@@ -224,7 +303,7 @@ func TestProxyStatusPendingShowsMessageAndRefresh(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/spark-abc/jobs/", nil)
 	rec := httptest.NewRecorder()
-	Handler(s, fixedNow, nil).ServeHTTP(rec, req)
+	Handler(s, fixedNow, nil, SHSConfig{}).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -251,7 +330,7 @@ func TestProxyStatusPendingWithReasonIncludesReason(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/spark-abc/", nil)
 	rec := httptest.NewRecorder()
-	Handler(s, fixedNow, nil).ServeHTTP(rec, req)
+	Handler(s, fixedNow, nil, SHSConfig{}).ServeHTTP(rec, req)
 
 	body := rec.Body.String()
 	if !strings.Contains(body, "Cannot pull the image") {
@@ -273,7 +352,7 @@ func TestProxyStatusRunningTriggersEnsureAndRefresh(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/spark-abc/jobs/", nil)
 	rec := httptest.NewRecorder()
-	Handler(s, fixedNow, ensurer).ServeHTTP(rec, req)
+	Handler(s, fixedNow, ensurer, SHSConfig{}).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -302,7 +381,7 @@ func TestProxyStatusFailedShowsHistoryLinkNoRefresh(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/spark-abc/", nil)
 	rec := httptest.NewRecorder()
-	Handler(s, fixedNow, nil).ServeHTTP(rec, req)
+	Handler(s, fixedNow, nil, SHSConfig{}).ServeHTTP(rec, req)
 
 	body := rec.Body.String()
 	if !strings.Contains(body, "/history/spark-abc/jobs/") {
@@ -328,7 +407,7 @@ func TestProxyStatusSucceededShowsHistoryLinkNoRefresh(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/spark-abc/", nil)
 	rec := httptest.NewRecorder()
-	Handler(s, fixedNow, nil).ServeHTTP(rec, req)
+	Handler(s, fixedNow, nil, SHSConfig{}).ServeHTTP(rec, req)
 
 	body := rec.Body.String()
 	if !strings.Contains(body, "/history/spark-abc/jobs/") {
@@ -350,7 +429,7 @@ func TestProxyStatusMissingPodShowsHistoryLink(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/proxy/spark-gone/", nil)
 	rec := httptest.NewRecorder()
-	Handler(s, fixedNow, nil).ServeHTTP(rec, req)
+	Handler(s, fixedNow, nil, SHSConfig{}).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -377,9 +456,205 @@ func TestProxyStatusRunningNilEnsurerIsSafe(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/proxy/spark-abc/", nil)
 	rec := httptest.NewRecorder()
 	// Should not panic.
-	Handler(s, fixedNow, nil).ServeHTTP(rec, req)
+	Handler(s, fixedNow, nil, SHSConfig{}).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
+}
+
+// ---- SHS-aware status page tests -------------------------------------------
+
+// TestProxyStatusSHSDownShowsWakeLink verifies that when SHS is configured and
+// down, the status page for a finished job shows a wake link instead of the
+// history link.
+func TestProxyStatusSHSDownShowsWakeLink(t *testing.T) {
+	s := newStore(store.Driver{
+		PodName:     "pod-1",
+		AppSelector: "spark-abc",
+		AppName:     "my-job",
+		State:       store.StateSucceeded,
+	})
+	shsCfg := SHSConfig{
+		Deployment: "spark-history",
+		Namespace:  "default",
+		State:      &staticSHSState{up: false},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/proxy/spark-abc/", nil)
+	rec := httptest.NewRecorder()
+	Handler(s, fixedNow, nil, shsCfg).ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if strings.Contains(body, "/history/spark-abc/jobs/") {
+		t.Errorf("SHS down: expected NO history link, got:\n%s", body)
+	}
+	if !strings.Contains(body, wakePath) {
+		t.Errorf("SHS down: expected wake path %q in body, got:\n%s", wakePath, body)
+	}
+}
+
+// TestProxyStatusSHSUpShowsHistoryLink verifies that when SHS is configured and
+// up, the status page shows the normal history link.
+func TestProxyStatusSHSUpShowsHistoryLink(t *testing.T) {
+	s := newStore(store.Driver{
+		PodName:     "pod-1",
+		AppSelector: "spark-abc",
+		AppName:     "my-job",
+		State:       store.StateSucceeded,
+	})
+	shsCfg := SHSConfig{
+		Deployment: "spark-history",
+		Namespace:  "default",
+		State:      &staticSHSState{up: true},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/proxy/spark-abc/", nil)
+	rec := httptest.NewRecorder()
+	Handler(s, fixedNow, nil, shsCfg).ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "/history/spark-abc/jobs/") {
+		t.Errorf("SHS up: expected history link in body, got:\n%s", body)
+	}
+	if strings.Contains(body, wakePath) {
+		t.Errorf("SHS up: expected NO wake link in body, got:\n%s", body)
+	}
+}
+
+// TestProxyStatusSHSNotConfiguredShowsHistoryLink verifies that when SHS is not
+// configured, the status page always shows the history link.
+func TestProxyStatusSHSNotConfiguredShowsHistoryLink(t *testing.T) {
+	s := newStore(store.Driver{
+		PodName:     "pod-1",
+		AppSelector: "spark-abc",
+		AppName:     "my-job",
+		State:       store.StateFailed,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/proxy/spark-abc/", nil)
+	rec := httptest.NewRecorder()
+	Handler(s, fixedNow, nil, SHSConfig{}).ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "/history/spark-abc/jobs/") {
+		t.Errorf("SHS not configured: expected history link in body, got:\n%s", body)
+	}
+}
+
+// ---- Wake endpoint tests ----------------------------------------------------
+
+// TestWakeHandlerMethodNotAllowed verifies that GET to the wake endpoint
+// returns 405.
+func TestWakeHandlerMethodNotAllowed(t *testing.T) {
+	shsCfg := SHSConfig{
+		Deployment: "spark-history",
+		Namespace:  "default",
+		State:      &staticSHSState{up: false},
+		Client:     newFakeDynClient(),
+	}
+	req := httptest.NewRequest(http.MethodGet, wakePath, nil)
+	rec := httptest.NewRecorder()
+	WakeHandler(shsCfg).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+// TestWakeHandlerNotConfigured verifies that the wake endpoint returns 501 when
+// SHSConfig has no Deployment.
+func TestWakeHandlerNotConfigured(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, wakePath, nil)
+	rec := httptest.NewRecorder()
+	WakeHandler(SHSConfig{}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotImplemented {
+		t.Errorf("expected 501, got %d", rec.Code)
+	}
+}
+
+// TestWakeHandlerSHSAlreadyUpRedirects verifies that when SHS is already up,
+// the wake endpoint immediately redirects to the ?then= URL.
+func TestWakeHandlerSHSAlreadyUpRedirects(t *testing.T) {
+	shsCfg := SHSConfig{
+		Deployment: "spark-history",
+		Namespace:  "default",
+		State:      &staticSHSState{up: true},
+		Client:     newFakeDynClient(),
+	}
+	req := httptest.NewRequest(http.MethodPost, wakePath+"?then=/history/spark-abc/jobs/", nil)
+	rec := httptest.NewRecorder()
+	WakeHandler(shsCfg).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/history/spark-abc/jobs/" {
+		t.Errorf("expected redirect to /history/spark-abc/jobs/, got %q", loc)
+	}
+}
+
+// TestWakeHandlerPatchesDeploymentAndReturnsWaitPage verifies that when SHS is
+// down, the wake endpoint patches the Deployment and returns the waiting page.
+func TestWakeHandlerPatchesDeploymentAndReturnsWaitPage(t *testing.T) {
+	// Create a fake Deployment object.
+	dep := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"metadata": map[string]interface{}{
+				"name":      "spark-history",
+				"namespace": "default",
+			},
+			"spec": map[string]interface{}{
+				"replicas": int64(0),
+			},
+		},
+	}
+	fc := newFakeDynClient(dep)
+	shsCfg := SHSConfig{
+		Deployment: "spark-history",
+		Namespace:  "default",
+		State:      &staticSHSState{up: false},
+		Client:     fc,
+	}
+
+	req := httptest.NewRequest(http.MethodPost, wakePath+"?then=/history/spark-abc/jobs/", nil)
+	rec := httptest.NewRecorder()
+	WakeHandler(shsCfg).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d\nbody: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify a Patch action was recorded.
+	fakeDyn := fc.(*fake.FakeDynamicClient)
+	var patched bool
+	for _, action := range fakeDyn.Actions() {
+		pa, ok := action.(k8stesting.PatchAction)
+		if !ok {
+			continue
+		}
+		if pa.GetResource() == (schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}) &&
+			pa.GetName() == "spark-history" &&
+			pa.GetPatchType() == types.MergePatchType {
+			patched = true
+		}
+	}
+	if !patched {
+		t.Errorf("expected a MergePatch action on deployments/spark-history, got actions: %v", fakeDyn.Actions())
+	}
+
+	// Verify the body contains the waiting page.
+	body := rec.Body.String()
+	if !strings.Contains(body, "Starting Spark History Server") {
+		t.Errorf("expected waiting page title in body, got:\n%s", body)
+	}
+	if !strings.Contains(body, "countdown") {
+		t.Errorf("expected countdown element in body, got:\n%s", body)
+	}
+
+	// Patch action must not refer to the Patch metav1 options that require
+	// the unused import; this line just uses the import.
 }

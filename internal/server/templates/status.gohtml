@@ -17,6 +17,8 @@
 <p class="message">{{.Message}}</p>
 {{- if .HistoryURL}}
 <p><a href="{{.HistoryURL}}">View in Spark History Server</a></p>
+{{- else if .WakeURL}}
+<p><a href="{{.WakeURL}}">Start Spark History Server and view job</a></p>
 {{- end}}
 {{- if .RefreshSeconds}}
 <p>This page will refresh in {{.RefreshSeconds}} seconds.</p>

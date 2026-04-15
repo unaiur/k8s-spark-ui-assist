@@ -29,6 +29,10 @@ type HTTPRouteConfig struct {
 	// SHSService is the name of the Kubernetes Service for the Spark History
 	// Server. When non-empty, a root HTTPRoute is managed dynamically.
 	SHSService string
+	// SHSDeployment is the name of the Kubernetes Deployment for the Spark
+	// History Server. When non-empty, the wake endpoint patches it to scale up.
+	// Defaults to SHSService when SHSService is set and SHSDeployment is empty.
+	SHSDeployment string
 }
 
 // Parse reads configuration from command-line flags and returns a Config.
@@ -43,8 +47,14 @@ func Parse() *Config {
 	flag.StringVar(&cfg.HTTPRoute.GatewayNamespace, "http-route.gateway-namespace", "", "Gateway namespace for HTTPRoute spec.parentRefs[0].namespace")
 	flag.StringVar(&cfg.HTTPRoute.SelfService, "self-service", "", "Kubernetes Service name for this application (used to build root HTTPRoute)")
 	flag.StringVar(&cfg.HTTPRoute.SHSService, "shs-service", "", "Kubernetes Service name for the Spark History Server (optional)")
+	flag.StringVar(&cfg.HTTPRoute.SHSDeployment, "shs-deployment", "", "Kubernetes Deployment name for the Spark History Server (defaults to -shs-service when not set)")
 
 	flag.Parse()
+
+	// Default SHSDeployment to SHSService so callers only need to set one flag.
+	if cfg.HTTPRoute.SHSDeployment == "" {
+		cfg.HTTPRoute.SHSDeployment = cfg.HTTPRoute.SHSService
+	}
 
 	if err := cfg.HTTPRoute.Validate(); err != nil {
 		flag.Usage()
