@@ -155,22 +155,45 @@ func TestRunStopSchedulerFiresImmediatelyInGracePeriod(t *testing.T) {
 
 	// Simulate current time is exactly at the stop time (grace period → fire now).
 	stopNow := time.Date(2026, 1, 1, 18, 0, 0, 0, time.UTC)
-	nowFn := func() time.Time { return stopNow }
+	// After the first call (which triggers immediate fire), return a time far
+	// from the stop time so the scheduler sleeps ~24h without looping.
+	calls := 0
+	nowFn := func() time.Time {
+		calls++
+		if calls == 1 {
+			return stopNow
+		}
+		// Well before tomorrow's stop — scheduler will sleep ~23h.
+		return stopNow.Add(time.Minute)
+	}
+
+	// Use a PrependReactor to signal when the first patch action arrives.
+	patchCh := make(chan struct{}, 1)
+	fc.PrependReactor("patch", "deployments", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		select {
+		case patchCh <- struct{}{}:
+		default:
+		}
+		return false, nil, nil // let the default reactor handle it
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Run the scheduler in the background; it should fire immediately then block
-	// waiting for the next day. Cancel the context to stop it after the patch.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		RunStopScheduler(ctx, fc, "default", "spark-history", 18, 0, nowFn)
 	}()
 
-	// Give the scheduler a moment to fire.
-	time.Sleep(100 * time.Millisecond)
-	cancel()
+	// Wait for the patch to arrive (or timeout).
+	select {
+	case <-patchCh:
+		// Patch received — cancel the context so the scheduler exits.
+		cancel()
+	case <-ctx.Done():
+		t.Error("timed out waiting for Deployment patch")
+	}
 	<-done
 
 	var patched bool

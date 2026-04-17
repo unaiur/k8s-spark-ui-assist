@@ -544,8 +544,8 @@ func TestProxyStatusSHSNotConfiguredShowsHistoryLink(t *testing.T) {
 
 // ---- Wake endpoint tests ----------------------------------------------------
 
-// TestWakeHandlerMethodNotAllowed verifies that GET to the wake endpoint
-// returns 405.
+// TestWakeHandlerMethodNotAllowed verifies that unsupported methods (e.g. PUT)
+// to the wake endpoint return 405.
 func TestWakeHandlerMethodNotAllowed(t *testing.T) {
 	shsCfg := SHSConfig{
 		Deployment: "spark-history",
@@ -553,7 +553,7 @@ func TestWakeHandlerMethodNotAllowed(t *testing.T) {
 		State:      &staticSHSState{up: false},
 		Client:     newFakeDynClient(),
 	}
-	req := httptest.NewRequest(http.MethodGet, wakePath, nil)
+	req := httptest.NewRequest(http.MethodPut, wakePath, nil)
 	rec := httptest.NewRecorder()
 	WakeHandler(shsCfg).ServeHTTP(rec, req)
 
@@ -595,9 +595,9 @@ func TestWakeHandlerSHSAlreadyUpRedirects(t *testing.T) {
 	}
 }
 
-// TestWakeHandlerPatchesDeploymentAndReturnsWaitPage verifies that when SHS is
-// down, the wake endpoint patches the Deployment and returns the waiting page.
-func TestWakeHandlerPatchesDeploymentAndReturnsWaitPage(t *testing.T) {
+// TestWakeHandlerPatchesDeploymentAndRedirects verifies that when SHS is
+// down, a POST patches the Deployment and 303-redirects to the GET polling URL.
+func TestWakeHandlerPatchesDeploymentAndRedirects(t *testing.T) {
 	// Create a fake Deployment object.
 	dep := &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -624,8 +624,12 @@ func TestWakeHandlerPatchesDeploymentAndReturnsWaitPage(t *testing.T) {
 	rec := httptest.NewRecorder()
 	WakeHandler(shsCfg).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK, got %d\nbody: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 See Other, got %d\nbody: %s", rec.Code, rec.Body.String())
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.Contains(loc, wakePath) {
+		t.Errorf("expected redirect to polling URL containing %q, got %q", wakePath, loc)
 	}
 
 	// Verify a Patch action was recorded.
@@ -645,8 +649,24 @@ func TestWakeHandlerPatchesDeploymentAndReturnsWaitPage(t *testing.T) {
 	if !patched {
 		t.Errorf("expected a MergePatch action on deployments/spark-history, got actions: %v", fakeDyn.Actions())
 	}
+}
 
-	// Verify the body contains the waiting page.
+// TestWakeHandlerGETSHSDown verifies that a GET to the wake endpoint when SHS
+// is still down renders the waiting page.
+func TestWakeHandlerGETSHSDown(t *testing.T) {
+	shsCfg := SHSConfig{
+		Deployment: "spark-history",
+		Namespace:  "default",
+		State:      &staticSHSState{up: false},
+		Client:     newFakeDynClient(),
+	}
+	req := httptest.NewRequest(http.MethodGet, wakePath+"?then=/history/spark-abc/jobs/", nil)
+	rec := httptest.NewRecorder()
+	WakeHandler(shsCfg).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", rec.Code)
+	}
 	body := rec.Body.String()
 	if !strings.Contains(body, "Starting Spark History Server") {
 		t.Errorf("expected waiting page title in body, got:\n%s", body)
@@ -654,7 +674,55 @@ func TestWakeHandlerPatchesDeploymentAndReturnsWaitPage(t *testing.T) {
 	if !strings.Contains(body, "countdown") {
 		t.Errorf("expected countdown element in body, got:\n%s", body)
 	}
+	// Meta refresh must target the polling URL, not be bare.
+	if !strings.Contains(body, ";url=") {
+		t.Errorf("expected meta refresh url= in body, got:\n%s", body)
+	}
+}
 
-	// Patch action must not refer to the Patch metav1 options that require
-	// the unused import; this line just uses the import.
+// TestWakeHandlerGETSHSUp verifies that a GET to the wake endpoint when SHS
+// is up redirects to the ?then= URL.
+func TestWakeHandlerGETSHSUp(t *testing.T) {
+	shsCfg := SHSConfig{
+		Deployment: "spark-history",
+		Namespace:  "default",
+		State:      &staticSHSState{up: true},
+		Client:     newFakeDynClient(),
+	}
+	req := httptest.NewRequest(http.MethodGet, wakePath+"?then=/history/spark-abc/jobs/", nil)
+	rec := httptest.NewRecorder()
+	WakeHandler(shsCfg).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/history/spark-abc/jobs/" {
+		t.Errorf("expected redirect to /history/spark-abc/jobs/, got %q", loc)
+	}
+}
+
+// TestWakeHandlerOpenRedirectRejected verifies that an absolute ?then= URL is
+// rejected and falls back to the dashboard path.
+func TestWakeHandlerOpenRedirectRejected(t *testing.T) {
+	shsCfg := SHSConfig{
+		Deployment: "spark-history",
+		Namespace:  "default",
+		State:      &staticSHSState{up: true},
+		Client:     newFakeDynClient(),
+	}
+	req := httptest.NewRequest(http.MethodPost, wakePath+"?then=https://evil.example.com/", nil)
+	rec := httptest.NewRecorder()
+	WakeHandler(shsCfg).ServeHTTP(rec, req)
+
+	// SHS is up, so we get a redirect — but to the safe fallback, not the attacker URL.
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if loc == "https://evil.example.com/" {
+		t.Errorf("open redirect: Location should not be the attacker URL, got %q", loc)
+	}
+	if loc != dashboardPath {
+		t.Errorf("expected fallback to dashboardPath %q, got %q", dashboardPath, loc)
+	}
 }

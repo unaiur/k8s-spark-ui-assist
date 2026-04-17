@@ -181,7 +181,7 @@ func serveDashboard(w http.ResponseWriter, r *http.Request, s *store.Store, now 
 	iv := indexView{Drivers: views}
 	if shsCfg.Deployment != "" {
 		if shsCfg.State != nil && shsCfg.State.IsUp() {
-			iv.SHSURL = "/"
+			iv.SHSURL = template.URL("/")
 		} else {
 			iv.SHSURL = template.URL(wakePath + "?then=/")
 		}
@@ -301,25 +301,49 @@ var deploymentGVR = schema.GroupVersionResource{
 	Resource: "deployments",
 }
 
-// serveWake handles POST /proxy/api/shs/wake?then=<target>.
-// It patches the SHS Deployment to 1 replica and returns a waiting page.
-// When the SHS is already up it redirects directly to ?then=.
-func serveWake(w http.ResponseWriter, r *http.Request, shsCfg SHSConfig) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
+// validateThen checks that target is a safe relative URL to redirect to.
+// It must start with "/" and must not contain a scheme or host (to prevent open redirects).
+// If target is empty or invalid, it returns the dashboard path.
+func validateThen(target string) string {
+	if target == "" {
+		return dashboardPath
 	}
+	u, err := url.Parse(target)
+	if err != nil || u.Scheme != "" || u.Host != "" || !strings.HasPrefix(target, "/") {
+		return dashboardPath
+	}
+	return target
+}
+
+// pollURL returns the GET polling URL for the wake endpoint with the given then parameter.
+func pollURL(then string) string {
+	return wakePath + "?then=" + url.QueryEscape(then)
+}
+
+// serveWake dispatches between POST (patch + redirect) and GET (polling page).
+func serveWake(w http.ResponseWriter, r *http.Request, shsCfg SHSConfig) {
 	if shsCfg.Deployment == "" || shsCfg.Client == nil {
 		http.Error(w, "SHS wake not configured", http.StatusNotImplemented)
 		return
 	}
 
-	then := r.URL.Query().Get("then")
-	if then == "" {
-		then = "/"
-	}
+	then := validateThen(r.URL.Query().Get("then"))
 
-	// If SHS is already up, redirect immediately.
+	switch r.Method {
+	case http.MethodPost:
+		serveWakePost(w, r, shsCfg, then)
+	case http.MethodGet:
+		serveWakeGet(w, r, shsCfg, then)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// serveWakePost handles POST /proxy/api/shs/wake?then=<target>.
+// It patches the SHS Deployment to 1 replica, then 303-redirects to the GET
+// polling URL so the browser can safely re-request via GET.
+func serveWakePost(w http.ResponseWriter, r *http.Request, shsCfg SHSConfig, then string) {
+	// If SHS is already up, redirect immediately to the target.
 	if shsCfg.State != nil && shsCfg.State.IsUp() {
 		http.Redirect(w, r, then, http.StatusFound)
 		return
@@ -346,11 +370,25 @@ func serveWake(w http.ResponseWriter, r *http.Request, shsCfg SHSConfig) {
 	}
 	log.Printf("shs wake: patched deployment %q to 1 replica", shsCfg.Deployment)
 
-	// Return the waiting page.
+	// 303 See Other so the browser follows with a GET to the polling page.
+	http.Redirect(w, r, pollURL(then), http.StatusSeeOther)
+}
+
+// serveWakeGet handles GET /proxy/api/shs/wake?then=<target>.
+// If SHS is up it redirects to then; otherwise it renders the waiting page with
+// a meta-refresh that re-requests this same GET URL after a short delay.
+func serveWakeGet(w http.ResponseWriter, r *http.Request, shsCfg SHSConfig, then string) {
+	// If SHS is now up, redirect to destination.
+	if shsCfg.State != nil && shsCfg.State.IsUp() {
+		http.Redirect(w, r, then, http.StatusFound)
+		return
+	}
+
+	// Render the waiting page; the meta-refresh targets this same GET URL.
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := wakeTmpl.Execute(w, map[string]interface{}{
 		"Then":           then,
-		"WakePath":       wakePath,
+		"PollURL":        pollURL(then),
 		"RefreshSeconds": 5,
 	}); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)

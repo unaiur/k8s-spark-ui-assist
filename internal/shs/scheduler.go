@@ -32,14 +32,20 @@ const gracePeriod = 30 * time.Minute
 // waits until the next day's occurrence. Otherwise it waits for the next
 // occurrence (today or tomorrow, whichever comes first).
 func RunStopScheduler(ctx context.Context, client dynamic.Interface, namespace, deployment string, hour, minute int, now func() time.Time) {
+	// firstFire determines the delay until the first scale-down event (possibly
+	// 0 if we are within the grace period). After each firing we always wait
+	// until the next 24h occurrence to avoid a tight loop when the grace-period
+	// branch returns 0 repeatedly.
+	delay := durationUntilNextStop(now(), hour, minute)
 	for {
-		delay := durationUntilNextStop(now(), hour, minute)
 		log.Printf("shs scheduler: next stop of %q in %s (at %02d:%02d UTC)", deployment, delay.Round(time.Second), hour, minute)
 
+		t := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			return
-		case <-time.After(delay):
+		case <-t.C:
 		}
 
 		if err := scaleDeploymentToZero(ctx, client, namespace, deployment); err != nil {
@@ -47,6 +53,12 @@ func RunStopScheduler(ctx context.Context, client dynamic.Interface, namespace, 
 		} else {
 			log.Printf("shs scheduler: scaled %q to 0 replicas", deployment)
 		}
+
+		// Next firing is always 24 h after today's scheduled stop time to prevent
+		// repeated immediate firings in the grace-period case.
+		current := now().UTC()
+		todayStop := time.Date(current.Year(), current.Month(), current.Day(), hour, minute, 0, 0, time.UTC)
+		delay = time.Until(todayStop.Add(24 * time.Hour))
 	}
 }
 
