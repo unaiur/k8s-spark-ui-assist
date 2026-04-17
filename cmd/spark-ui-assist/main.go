@@ -74,6 +74,13 @@ func main() {
 			State:      shsState,
 			Client:     dynClient,
 		}
+
+		if cfg.HTTPRoute.SHSStopEnabled {
+			go shs.RunStopScheduler(ctx, dynClient, cfg.Namespace, cfg.HTTPRoute.SHSDeployment,
+				cfg.HTTPRoute.SHSStopHour, cfg.HTTPRoute.SHSStopMinute, time.Now)
+			log.Printf("shs scheduler: will stop %q daily at %02d:%02d UTC",
+				cfg.HTTPRoute.SHSDeployment, cfg.HTTPRoute.SHSStopHour, cfg.HTTPRoute.SHSStopMinute)
+		}
 	}
 
 	mux := http.NewServeMux()

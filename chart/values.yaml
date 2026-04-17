@@ -15,7 +15,13 @@ shsService: ""
 # to scale up from zero when a user clicks the "Start Spark History Server" link.
 # Defaults to shsService when not set (i.e. the Service and Deployment share the
 # same name, which is the common case).
+# Set to "disabled" to disable wake/stop features even when shsService is set.
 shsDeployment: ""
+
+# UTC time (HH:MM) at which the SHS Deployment is automatically scaled to zero
+# each day. Empty (default) or "disabled" disables the automatic stop.
+# Only effective when shsDeployment (or shsService) is configured.
+shsStopTime: "disabled"
 
 # Container image.
 image:

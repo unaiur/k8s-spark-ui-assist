@@ -45,6 +45,9 @@ spec:
             {{- if .Values.shsDeployment }}
             - -shs-deployment={{ .Values.shsDeployment }}
             {{- end }}
+            {{- if .Values.shsStopTime }}
+            - -shs-stop-time={{ .Values.shsStopTime }}
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080
