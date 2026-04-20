@@ -58,16 +58,37 @@ func main() {
 	}
 	go watcher.Watch(ctx, lw, s, routeHandler, onSynced)
 
-	// Start the SHS Endpoints watcher if configured.
+	// Start the SHS EndpointSlice watcher if configured, and build SHSConfig.
+	var shsCfg server.SHSConfig
 	if cfg.HTTPRoute.SHSService != "" {
-		shsHandler := &shsRouteHandler{ctx: ctx, mgr: mgr}
-		go shs.Watch(ctx, dynClient, cfg.Namespace, cfg.HTTPRoute.SHSService, shsHandler, nil)
+		shsState := &shs.State{}
+		shsRouteH := &shsRouteHandler{ctx: ctx, mgr: mgr}
+		// Combine route handler and state updates in a single shs.Handler.
+		combined := &combinedSHSHandler{route: shsRouteH, state: shsState}
+		go shs.Watch(ctx, dynClient, cfg.Namespace, cfg.HTTPRoute.SHSService, combined, nil)
 		log.Printf("shs: watching Endpoints for service %q", cfg.HTTPRoute.SHSService)
+
+		shsCfg = server.SHSConfig{
+			Deployment: cfg.HTTPRoute.SHSDeployment,
+			Namespace:  cfg.Namespace,
+			State:      shsState,
+			Client:     dynClient,
+		}
+
+		if cfg.HTTPRoute.SHSStopEnabled {
+			go shs.RunStopScheduler(ctx, dynClient, cfg.Namespace, cfg.HTTPRoute.SHSDeployment,
+				cfg.HTTPRoute.SHSStopHour, cfg.HTTPRoute.SHSStopMinute, time.Now)
+			log.Printf("shs scheduler: will stop %q daily at %02d:%02d UTC",
+				cfg.HTTPRoute.SHSDeployment, cfg.HTTPRoute.SHSStopHour, cfg.HTTPRoute.SHSStopMinute)
+		}
 	}
 
 	mux := http.NewServeMux()
+	// Register the SHS wake endpoint before the /proxy/api/ catch-all so the
+	// more-specific pattern takes precedence.
+	mux.Handle("/proxy/api/shs/wake", server.WakeHandler(shsCfg))
 	mux.Handle("/proxy/api/", api.Handler(s, mgr))
-	mux.Handle("/", server.Handler(s, time.Now, mgr))
+	mux.Handle("/", server.Handler(s, time.Now, mgr, shsCfg))
 
 	srv := &http.Server{
 		Addr:    ":8080",
@@ -115,6 +136,22 @@ func (h *shsRouteHandler) OnUp() {
 
 func (h *shsRouteHandler) OnDown() {
 	h.mgr.EnsureFallbackRootRoute(h.ctx)
+}
+
+// combinedSHSHandler fans out SHS events to both the route handler and the state tracker.
+type combinedSHSHandler struct {
+	route *shsRouteHandler
+	state *shs.State
+}
+
+func (h *combinedSHSHandler) OnUp() {
+	h.state.OnUp()
+	h.route.OnUp()
+}
+
+func (h *combinedSHSHandler) OnDown() {
+	h.state.OnDown()
+	h.route.OnDown()
 }
 
 // loadKubeConfig tries in-cluster config first, then falls back to KUBECONFIG / default kubeconfig.
