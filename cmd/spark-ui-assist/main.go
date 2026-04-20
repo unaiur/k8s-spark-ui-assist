@@ -47,21 +47,13 @@ func main() {
 
 	lw := watcher.NewListerWatcher(cfg.Namespace, dynClient)
 
-	onSynced := func() {
-		log.Printf("httproute: informer synced, reconciling routes")
-		if err := mgr.Reconcile(ctx, s.ListRunning()); err != nil {
-			log.Printf("httproute: initial reconcile failed: %v", err)
-		}
-		// Always ensure the fallback root route exists so "/" is reachable
-		// immediately after startup, before any SHS state is known.
-		mgr.EnsureFallbackRootRoute(ctx)
-	}
-	go watcher.Watch(ctx, lw, s, routeHandler, onSynced)
-
 	// Start the SHS EndpointSlice watcher if configured, and build SHSConfig.
+	// Must be started before the pod watcher so shsState is populated by the
+	// time onSynced runs and can decide whether to apply the fallback route.
 	var shsCfg server.SHSConfig
+	var shsState *shs.State
 	if cfg.HTTPRoute.SHSService != "" {
-		shsState := &shs.State{}
+		shsState = &shs.State{}
 		shsRouteH := &shsRouteHandler{ctx: ctx, mgr: mgr}
 		// Combine route handler and state updates in a single shs.Handler.
 		combined := &combinedSHSHandler{route: shsRouteH, state: shsState}
@@ -82,6 +74,22 @@ func main() {
 				cfg.HTTPRoute.SHSDeployment, cfg.HTTPRoute.SHSStopHour, cfg.HTTPRoute.SHSStopMinute)
 		}
 	}
+
+	onSynced := func() {
+		log.Printf("httproute: informer synced, reconciling routes")
+		if err := mgr.Reconcile(ctx, s.ListRunning()); err != nil {
+			log.Printf("httproute: initial reconcile failed: %v", err)
+		}
+		// Only apply the fallback route if SHS is not already up.
+		// If shsState is nil (SHS not configured) or SHS is down, write the
+		// fallback so "/" always points somewhere reachable.
+		// If SHS is already up, EnsureSHSRoute has already been called by the
+		// SHS watcher; overwriting it with the fallback would break routing.
+		if shsState == nil || !shsState.IsUp() {
+			mgr.EnsureFallbackRootRoute(ctx)
+		}
+	}
+	go watcher.Watch(ctx, lw, s, routeHandler, onSynced)
 
 	mux := http.NewServeMux()
 	// Register the SHS wake endpoint before the /proxy/api/ catch-all so the
