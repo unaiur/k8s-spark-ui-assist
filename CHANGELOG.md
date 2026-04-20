@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.2.0](https://github.com/unaiur/k8s-spark-ui-assist/compare/v2.1.0...v2.2.0) (2026-04-20)
+
+
+### Features
+
+* SHS wake-from-idle and daily auto-stop ([#45](https://github.com/unaiur/k8s-spark-ui-assist/issues/45)) ([f38016e](https://github.com/unaiur/k8s-spark-ui-assist/commit/f38016e142fe4ec54ef711ebc1a05ba78275a566))
+
+
+### Bug Fixes
+
+* don't overwrite SHS route with fallback if SHS is already up on startup ([#47](https://github.com/unaiur/k8s-spark-ui-assist/issues/47)) ([7480368](https://github.com/unaiur/k8s-spark-ui-assist/commit/74803684c415842c8a8611037ec959e27d20d798))
+
 ## [2.1.0](https://github.com/unaiur/k8s-spark-ui-assist/compare/v2.0.2...v2.1.0) (2026-04-14)
 
 
